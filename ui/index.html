@@ -50,9 +50,13 @@
   .chips { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
   button.chip {
     display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line);
-    background: var(--panel); color: var(--ink-2); border-radius: 999px; padding: 4px 12px;
-    font: 600 12.5px var(--ui); cursor: pointer;
+    background: var(--panel); color: var(--ink-2); border-radius: 999px; padding: 5px 14px;
+    font: 600 13px var(--ui); cursor: pointer;
   }
+  /* Chips de personalización: solo icono, discretos frente a los filtros */
+  button.chip.icon { padding: 4px 9px; font-size: 12.5px; opacity: .65; }
+  button.chip.icon:hover, button.chip.icon[aria-pressed="true"] { opacity: 1; }
+  .chip-sep { width: 1px; align-self: stretch; background: var(--line); margin: 2px 4px; }
   button.chip:hover { border-color: var(--ink-3); }
   button.chip:focus-visible, .card:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--chrome); outline-offset: 2px; }
   button.chip[aria-pressed="true"] { border-color: currentColor; background: var(--panel-2); }
@@ -66,11 +70,12 @@
   /* Crecen para llenar el ancho; solo hay scroll cuando de verdad no caben */
   .desktops.row .desktop { flex: 1 0 335px; }
   .desktop { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; align-self: start; }
-  .desktop-h { display: flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--ink-2); flex-wrap: wrap; }
-  .desktop-h .key { font-family: var(--mono); font-size: 11px; font-weight: 600; border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; background: var(--panel); }
-  .desktop-h button.key { cursor: pointer; color: var(--chrome); }
-  .desktop-h button.key:hover { border-color: var(--chrome); }
-  .desktop-h h2 { font-size: 13px; font-weight: 650; letter-spacing: .02em; overflow-wrap: anywhere; }
+  .desktop-h { display: flex; align-items: center; gap: 8px; padding: 2px 4px 4px; color: var(--ink-2); flex-wrap: wrap; }
+  /* El nombre del escritorio es el titular de la sección: grande y legible */
+  .desktop-h .key { font: 700 15.5px var(--ui); color: var(--ink); background: none; border: none; padding: 0; letter-spacing: .01em; }
+  .desktop-h button.key { cursor: pointer; }
+  .desktop-h button.key:hover { color: var(--chrome); }
+  .desktop-h h2 { font: 500 11px var(--mono); color: var(--ink-3); overflow-wrap: anywhere; }
   .desktop-h .count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
   .here-tag { font: 600 11px var(--ui); color: var(--chrome); white-space: nowrap; }
   .desktop.here { border-color: var(--chrome); }
@@ -142,8 +147,20 @@
   .note-form button:hover { border-color: var(--chrome); color: var(--chrome); }
   .updated { margin-top: 20px; color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
 
-  #settings { margin-top: 22px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
-  #settings summary { cursor: pointer; font: 600 12.5px var(--ui); color: var(--ink-2); }
+  #settings {
+    background: var(--panel); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 12px; padding: 16px 20px 14px; max-width: 860px; width: 92vw;
+    box-shadow: 0 12px 40px rgba(0,0,0,.45);
+  }
+  #settings::backdrop { background: rgba(8,12,16,.55); }
+  .set-head { display: flex; align-items: center; }
+  .set-head h3 { font: 650 15px var(--ui); }
+  .set-head button { margin-left: auto; border: none; background: none; color: var(--ink-3); font-size: 15px; cursor: pointer; padding: 2px 6px; }
+  .set-head button:hover { color: var(--attn); }
+  #settings h4 { font: 650 12px var(--ui); color: var(--ink-3); text-transform: uppercase; letter-spacing: .06em; margin: 14px 2px 8px; }
+  .set-checks { display: flex; flex-direction: column; gap: 7px; margin: 0 2px; }
+  .set-checks label { display: flex; align-items: center; gap: 8px; font: 500 12.5px var(--ui); color: var(--ink-2); cursor: pointer; }
+  .set-checks input { accent-color: var(--chrome); }
   .set-grid { display: grid; gap: 10px 18px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin: 12px 2px 4px; }
   .set-grid label { display: flex; flex-direction: column; gap: 4px; font: 600 11.5px var(--ui); color: var(--ink-2); }
   .set-grid input, .set-grid select {
@@ -166,17 +183,19 @@
   <div class="bar-inner">
     <div class="brand"><strong>Atalaya</strong><span>monitor de sesiones</span></div>
     <span id="offline">⚠ sin conexión con el hub — reintentando…</span>
-    <div class="chips" role="group" aria-label="Filtrar por estado" id="chips">
-      <button class="chip" id="viewToggle" aria-pressed="false"
-        title="Mostrar también las demás ventanas de cada escritorio">🖥 Ventanas</button>
-      <button class="chip" id="layoutToggle"
-        title="Alternar entre cuadrícula (columnas y filas según el espacio) y una sola fila con scroll">⊞ Cuadrícula</button>
-      <button class="chip" id="notesToggle" aria-pressed="true"
-        title="Mostrar u ocultar la sección de notas manuales">🗒 Notas</button>
+    <div class="chips" role="group" aria-label="Filtros y accesos" id="chips">
       <button class="chip attn" data-f="needs_you" aria-pressed="false">🔔 Te necesita <span class="n">0</span></button>
       <button class="chip work" data-f="working" aria-pressed="false">⚙ Trabajando <span class="n">0</span></button>
       <button class="chip ready" data-f="ready" aria-pressed="false">✓ Listo <span class="n">0</span></button>
       <button class="chip idle" data-f="idle" aria-pressed="false">· Inactivo <span class="n">0</span></button>
+      <span class="chip-sep" aria-hidden="true"></span>
+      <button class="chip icon" id="viewToggle" aria-pressed="false"
+        title="Ventanas de programas: mostrar también las demás ventanas de cada escritorio">🖥</button>
+      <button class="chip icon" id="layoutToggle"
+        title="Alternar cuadrícula / una sola fila">⊞</button>
+      <button class="chip icon" id="notesToggle" aria-pressed="true"
+        title="Mostrar u ocultar las notas manuales">🗒</button>
+      <button class="chip icon" id="settingsBtn" title="Ajustes (hotkeys, píldora y vistas)">⚙</button>
     </div>
   </div>
 </header>
@@ -184,8 +203,18 @@
 <div class="frame">
   <div class="desktops" id="board"></div>
 
-  <details id="settings">
-    <summary>⚙ Ajustes (hotkeys y píldora)</summary>
+  <dialog id="settings">
+    <div class="set-head">
+      <h3>⚙ Ajustes</h3>
+      <button id="setClose" title="Cerrar (Esc)">✕</button>
+    </div>
+    <h4>Vistas del panel</h4>
+    <div class="set-checks">
+      <label><input type="checkbox" id="chkVentanas"> Mostrar ventanas de programas por escritorio</label>
+      <label><input type="checkbox" id="chkFila"> Tablero en una sola fila (scroll horizontal)</label>
+      <label><input type="checkbox" id="chkNotas"> Mostrar notas manuales</label>
+    </div>
+    <h4>Hotkeys y píldora</h4>
     <div class="set-grid">
       <label>Mostrar/ocultar panel <input data-hk="togglePanel" placeholder="Ctrl+Alt+A"></label>
       <label>Ir a sesión urgente <input data-hk="jumpUrgent" placeholder="Ctrl+Alt+J"></label>
@@ -221,7 +250,7 @@
       <button id="setSave">Guardar y reiniciar HUD</button>
       <span id="setStatus"></span>
     </div>
-  </details>
+  </dialog>
 
   <p class="updated" id="updated"></p>
 </div>
@@ -231,7 +260,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.8.2";
+const UI_VERSION = "0.9.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -607,43 +636,52 @@ document.querySelectorAll("#chips .chip[data-f]").forEach((chip) => {
   });
 });
 
-// Notas visibles u ocultas (preferencia recordada)
+// ── Preferencias de vista (chips de icono + interruptores en Ajustes) ───────
 let showNotes = localStorage.getItem("atalayaNotes") !== "0";
-const notesToggle = document.getElementById("notesToggle");
-notesToggle.setAttribute("aria-pressed", String(showNotes));
-notesToggle.addEventListener("click", () => {
-  showNotes = !showNotes;
-  localStorage.setItem("atalayaNotes", showNotes ? "1" : "0");
-  notesToggle.setAttribute("aria-pressed", String(showNotes));
-  render();
-});
-
-// Layout de escritorios: cuadrícula (según espacio) o una sola fila
 let layoutRow = localStorage.getItem("atalayaLayout") === "row";
+const notesToggle = document.getElementById("notesToggle");
 const layoutToggle = document.getElementById("layoutToggle");
-function applyLayout() {
-  document.getElementById("board").classList.toggle("row", layoutRow);
-  layoutToggle.textContent = layoutRow ? "▭ Una fila" : "⊞ Cuadrícula";
-}
-layoutToggle.addEventListener("click", () => {
-  layoutRow = !layoutRow;
-  localStorage.setItem("atalayaLayout", layoutRow ? "row" : "grid");
-  applyLayout();
-});
-applyLayout();
-
 const viewToggle = document.getElementById("viewToggle");
-function syncViewToggle() {
+
+function syncPrefUI() {
+  notesToggle.setAttribute("aria-pressed", String(showNotes));
   viewToggle.setAttribute("aria-pressed", String(viewAll));
+  layoutToggle.textContent = layoutRow ? "▭" : "⊞";
+  layoutToggle.title = layoutRow
+    ? "Una sola fila (clic: cuadrícula según el espacio)"
+    : "Cuadrícula según el espacio (clic: una sola fila)";
+  document.getElementById("board").classList.toggle("row", layoutRow);
+  document.getElementById("chkVentanas").checked = viewAll;
+  document.getElementById("chkFila").checked = layoutRow;
+  document.getElementById("chkNotas").checked = showNotes;
 }
-viewToggle.addEventListener("click", () => {
-  viewAll = !viewAll;
-  localStorage.setItem("atalayaViewAll", viewAll ? "1" : "0");
-  syncViewToggle();
-  if (viewAll) fetchDeskInfo();
+
+function setShowNotes(v) {
+  showNotes = v;
+  localStorage.setItem("atalayaNotes", v ? "1" : "0");
+  syncPrefUI();
+  render();
+}
+function setLayoutRow(v) {
+  layoutRow = v;
+  localStorage.setItem("atalayaLayout", v ? "row" : "grid");
+  syncPrefUI();
+}
+function setViewAll(v) {
+  viewAll = v;
+  localStorage.setItem("atalayaViewAll", v ? "1" : "0");
+  syncPrefUI();
+  if (v) fetchDeskInfo();
   else render();
-});
-syncViewToggle();
+}
+
+notesToggle.addEventListener("click", () => setShowNotes(!showNotes));
+layoutToggle.addEventListener("click", () => setLayoutRow(!layoutRow));
+viewToggle.addEventListener("click", () => setViewAll(!viewAll));
+document.getElementById("chkNotas").addEventListener("change", (e) => setShowNotes(e.target.checked));
+document.getElementById("chkFila").addEventListener("change", (e) => setLayoutRow(e.target.checked));
+document.getElementById("chkVentanas").addEventListener("change", (e) => setViewAll(e.target.checked));
+syncPrefUI();
 if (viewAll) fetchDeskInfo();
 setInterval(() => { if (viewAll) fetchDeskInfo(); }, 20000);
 
@@ -680,8 +718,7 @@ document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
 });
 
 const settingsEl = document.getElementById("settings");
-settingsEl.addEventListener("toggle", async () => {
-  if (!settingsEl.open) return;
+document.getElementById("settingsBtn").addEventListener("click", async () => {
   try {
     const cfg = await (await fetch("/api/config")).json();
     document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
@@ -691,7 +728,10 @@ settingsEl.addEventListener("toggle", async () => {
     document.getElementById("setMaxPins").value =
       cfg.pill && cfg.pill.maxPins !== undefined ? String(cfg.pill.maxPins) : "3";
   } catch { /* hub caído: se queda vacío */ }
+  syncPrefUI();
+  settingsEl.showModal();
 });
+document.getElementById("setClose").addEventListener("click", () => settingsEl.close());
 document.getElementById("setSave").addEventListener("click", async () => {
   const status = document.getElementById("setStatus");
   const hotkeys = {};
