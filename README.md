@@ -56,14 +56,17 @@ atalaya.cmd -Stop              :: detiene todo
 atalaya.cmd -InstallAutostart  :: arrancar con Windows
 ```
 
-- **HUD**: muestra el **nombre del escritorio actual** (tu ayuda-memoria al
-  moverte entre escritorios) y los contadores 🔔/⚙/✓. Doble clic = abrir
-  panel · arrastrar = mover · clic derecho = menú.
+- **HUD (píldora)**: un **botón por escritorio** (número; el actual muestra
+  además su nombre; ámbar si pide atención) — un clic y estás ahí — más los
+  contadores 🔔/⚙/✓. Doble clic = abrir panel · arrastrar = mover · clic
+  derecho = menú. La posición se puede fijar a una esquina desde Ajustes.
 - **Deck** (al pasar el mouse sobre el HUD): mini-panel con una fila por
   escritorio — nombre, agentes por estado, el trabajo más relevante y nº de
   ventanas. El que pide atención se resalta en ámbar; el actual se marca ◉.
   - **Clic** en una fila = ir a ese escritorio · **clic derecho** = renombrarlo
     (cambia el nombre real del escritorio de Windows).
+  - **◀ ▶** = escritorio anterior/siguiente (con vuelta) · **+** = crear
+    escritorio nuevo e ir a él.
   - **📌 fijar**: el deck queda siempre visible — translúcido en reposo, opaco
     al pasar el mouse — para recordar de un vistazo qué hay en cada escritorio
     sin ningún clic. La preferencia persiste.
@@ -90,16 +93,16 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
   |---|---|
   | `Ctrl+Alt+A` | Mostrar/ocultar el panel (modo quake: aparece en el escritorio actual) |
   | `Ctrl+Alt+J` | Saltar a la sesión más urgente (la que lleva más tiempo esperándote) |
+  | `Ctrl+Alt+Right` | Escritorio siguiente (con vuelta al llegar al final) |
+  | `Ctrl+Alt+Left` | Escritorio anterior (con vuelta) |
+  | — (`none`) | Crear escritorio nuevo e ir a él |
+  | — (`none`) | Fijar/soltar el deck |
 
-  Se configuran en `%USERPROFILE%\.atalaya\config.json` (se crea solo con los
-  valores por defecto; reiniciar el HUD para aplicar cambios):
-
-  ```json
-  { "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J" } }
-  ```
-
-  Modificadores: `Ctrl`, `Alt`, `Shift`, `Win` · teclas: `A`-`Z`, `0`-`9`,
-  `F1`-`F24` · `"none"` desactiva ese atajo.
+  Se editan desde el propio panel (sección **⚙ Ajustes**, que también guarda
+  la esquina de la píldora y reinicia el HUD para aplicar), o a mano en
+  `%USERPROFILE%\.atalaya\config.json`. Modificadores: `Ctrl`, `Alt`,
+  `Shift`, `Win` · teclas: `A`-`Z`, `0`-`9`, `F1`-`F24`, `Left/Right/Up/Down`,
+  `Space`, `Tab` · `"none"` desactiva ese atajo.
 
 ## Saltar a una sesión
 

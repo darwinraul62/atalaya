@@ -18,10 +18,10 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
-import { execFile } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.5.0";
+const VERSION = "0.6.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -35,6 +35,8 @@ const WINCTL_PS1 = path.join(REPO_ROOT, "scripts", "winctl.ps1");
 const WINDOWS_FILE = path.join(STATE_DIR, "windows.json");
 const LABELS_FILE = path.join(STATE_DIR, "labels.json");
 const ICONS_DIR = path.join(STATE_DIR, "icons");
+const CONFIG_FILE = path.join(STATE_DIR, "config.json");
+const HUD_PS1 = path.join(REPO_ROOT, "scripts", "hud.ps1");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
 const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"];
 
@@ -144,10 +146,9 @@ function captureWindowContext(sessionIds) {
         scheduleBroadcast();
       };
       if (!fs.existsSync(VDESK_EXE)) return finish(null, null);
-      execFile(
-        VDESK_EXE,
+      execVdesk(
         [`/GetDesktopFromWindowHandle:${info.hwnd}`],
-        { windowsHide: true, timeout: 5000 },
+        { timeout: 5000 },
         (e2, out2) => {
           // Salida: "Window is on desktop number 1 (desktop 'Dev')"
           const m = String(out2 || "").match(/desktop number (\d+)(?:\s*\(desktop '([^']*)'\))?/);
@@ -189,7 +190,7 @@ function refreshCurrentDesktop() {
   return new Promise((resolve) => {
     if (process.platform !== "win32" || !fs.existsSync(VDESK_EXE)) return resolve(null);
     if (Date.now() - currentDesktopAt < 2000) return resolve(currentDesktop);
-    execFile(VDESK_EXE, ["/GetCurrentDesktop"], { windowsHide: true, timeout: 3000 }, (err, out) => {
+    execVdesk(["/GetCurrentDesktop"], { timeout: 3000 }, (err, out) => {
       // Salida: "Current desktop: 'Dev' (desktop number 1)"
       const m = String(out || "").match(/Current desktop: '([^']*)' \(desktop number (\d+)\)/);
       if (m) currentDesktop = { num: Number(m[2]), name: m[1] };
@@ -201,6 +202,22 @@ function refreshCurrentDesktop() {
 
 // ── Escritorios y ventanas ──────────────────────────────────────────────────
 
+// VirtualDesktop.exe (app .NET de consola) escribe su salida en el codepage
+// OEM: leída como UTF-8 destroza las tildes ("Sesión" → "Sesi�n"). Se ejecuta
+// vía cmd con chcp 65001 para forzar salida UTF-8. windowsVerbatimArguments
+// es imprescindible: sin él node escapa las comillas como \" y cmd no las
+// entiende. Los args se citan a mano y se les quitan comillas dobles.
+function execVdesk(args, opts, cb) {
+  const payload = args.map((a) => `"${String(a).replace(/"/g, "")}"`).join(" ");
+  const line = `/d /s /c "chcp 65001>nul && "${VDESK_EXE}" ${payload}"`;
+  execFile(
+    "cmd.exe",
+    [line],
+    { windowsHide: true, windowsVerbatimArguments: true, ...opts },
+    cb
+  );
+}
+
 let desktopsCache = null;
 let desktopsAt = 0;
 
@@ -208,7 +225,7 @@ function listDesktops() {
   return new Promise((resolve) => {
     if (process.platform !== "win32" || !fs.existsSync(VDESK_EXE)) return resolve(null);
     if (Date.now() - desktopsAt < 5000 && desktopsCache) return resolve(desktopsCache);
-    execFile(VDESK_EXE, ["/List"], { windowsHide: true, timeout: 5000 }, (err, out) => {
+    execVdesk(["/List"], { timeout: 5000 }, (err, out) => {
       const lines = String(out || "").split(/\r?\n/);
       const start = lines.findIndex((l) => /^-+$/.test(l.trim()));
       const desks = [];
@@ -270,7 +287,7 @@ function mapWindowsToDesktops(wins) {
     const runChunk = () => {
       if (!queue.length) return resolve();
       const args = queue.map((w) => `/GetDesktopFromWindowHandle:${w.hwnd}`);
-      execFile(VDESK_EXE, args, { windowsHide: true, timeout: 10000 }, (err, out) => {
+      execVdesk(args, { timeout: 10000 }, (err, out) => {
         const lines = String(out || "").split(/\r?\n/).filter((l) => /desktop number/.test(l));
         for (const line of lines) {
           if (!queue.length) break;
@@ -687,10 +704,9 @@ const server = http.createServer(async (req, res) => {
     if (!fs.existsSync(VDESK_EXE)) {
       return json(res, 409, { error: "falta tools\\VirtualDesktop.exe (tools\\get-virtualdesktop.ps1)" });
     }
-    execFile(
-      VDESK_EXE,
+    execVdesk(
       [`/GetDesktop:${n}`, `/Name:${name}`],
-      { windowsHide: true, timeout: 5000 },
+      { timeout: 5000 },
       (err, out) => {
         if (!/Set name of desktop/i.test(String(out || ""))) {
           return json(res, 502, { error: "no se pudo renombrar el escritorio" });
@@ -713,6 +729,71 @@ const server = http.createServer(async (req, res) => {
       }
     );
     return;
+  }
+
+  // Configuración del usuario (hotkeys, píldora). El HUD la lee al arrancar:
+  // tras guardar hay que reiniciarlo (POST /api/hud/restart).
+  if (route === "GET /api/config") {
+    try {
+      return json(res, 200, JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8")));
+    } catch {
+      return json(res, 200, {});
+    }
+  }
+
+  if (route === "POST /api/config") {
+    const body = await readBody(req);
+    let cfg = {};
+    try {
+      cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    } catch {
+      /* config nueva */
+    }
+    if (body.hotkeys && typeof body.hotkeys === "object") {
+      cfg.hotkeys = { ...cfg.hotkeys };
+      for (const [k, v] of Object.entries(body.hotkeys)) {
+        cfg.hotkeys[String(k).slice(0, 30)] = String(v).slice(0, 40);
+      }
+    }
+    if (body.pill && typeof body.pill === "object") {
+      cfg.pill = { ...cfg.pill };
+      if (body.pill.corner !== undefined) {
+        const c = String(body.pill.corner);
+        cfg.pill.corner = ["br", "bl", "tr", "tl"].includes(c) ? c : "";
+      }
+    }
+    try {
+      fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+      return json(res, 200, { ok: true });
+    } catch (e) {
+      return json(res, 500, { error: `no se pudo guardar: ${e.message}` });
+    }
+  }
+
+  if (route === "POST /api/hud/restart") {
+    if (process.platform !== "win32") return json(res, 409, { error: "solo Windows" });
+    try {
+      const pidFile = path.join(STATE_DIR, "hud.pid");
+      if (fs.existsSync(pidFile)) {
+        const hudPid = Number(fs.readFileSync(pidFile, "utf8"));
+        if (Number.isInteger(hudPid) && hudPid > 0) {
+          try { process.kill(hudPid); } catch { /* ya no corre */ }
+        }
+      }
+      setTimeout(() => {
+        // OJO: sin detached — en Windows separa al hijo de la consola y
+        // powershell+WPF muere al arrancar. El hijo sobrevive al hub igual.
+        const child = spawn(
+          "powershell.exe",
+          ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", HUD_PS1],
+          { stdio: "ignore", windowsHide: true }
+        );
+        child.unref();
+      }, 500);
+      return json(res, 200, { ok: true });
+    } catch (e) {
+      return json(res, 500, { error: e.message });
+    }
   }
 
   if (route === "POST /api/windows/focus") {
@@ -783,7 +864,7 @@ const server = http.createServer(async (req, res) => {
     }
     // OJO: VirtualDesktop.exe devuelve el número de escritorio como exit code
     // (no cero != error); el éxito se decide por el texto de salida.
-    execFile(VDESK_EXE, [`/Switch:${n}`], { windowsHide: true, timeout: 5000 }, (err, out) => {
+    execVdesk([`/Switch:${n}`], { timeout: 5000 }, (err, out) => {
       if (/Switching to virtual desktop/.test(String(out || ""))) json(res, 200, { ok: true });
       else json(res, 502, { error: "no se pudo cambiar de escritorio" });
     });

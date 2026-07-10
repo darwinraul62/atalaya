@@ -25,19 +25,31 @@ $PosFile  = Join-Path $StateDir "hud.json"
 $LogFile  = Join-Path $StateDir "hub.log"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
-# Hotkeys configurables en ~/.atalaya/config.json ("none" desactiva):
-#   { "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J" } }
-$HotkeyTogglePanel = "Ctrl+Alt+A"
-$HotkeyJumpUrgent  = "Ctrl+Alt+J"
+# Configuracion en ~/.atalaya/config.json (editable tambien desde el panel,
+# seccion Ajustes; "none" desactiva un atajo; reiniciar el HUD para aplicar):
+#   { "hotkeys": { "togglePanel": "Ctrl+Alt+A", ... }, "pill": { "corner": "br" } }
+$Hotkeys = @{
+    togglePanel = "Ctrl+Alt+A"
+    jumpUrgent  = "Ctrl+Alt+J"
+    nextDesktop = "Ctrl+Alt+Right"
+    prevDesktop = "Ctrl+Alt+Left"
+    newDesktop  = "none"
+    toggleDeck  = "none"
+}
+$PillCorner = ""
 try {
     $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
-    if ($cfg.hotkeys.togglePanel) { $HotkeyTogglePanel = [string]$cfg.hotkeys.togglePanel }
-    if ($cfg.hotkeys.jumpUrgent)  { $HotkeyJumpUrgent  = [string]$cfg.hotkeys.jumpUrgent }
+    foreach ($k in @($Hotkeys.Keys)) {
+        if ($cfg.hotkeys.$k) { $Hotkeys[$k] = [string]$cfg.hotkeys.$k }
+    }
+    if ($cfg.pill.corner) { $PillCorner = [string]$cfg.pill.corner }
 } catch { }
 
 function ConvertTo-Hotkey([string]$spec) {
-    # "Ctrl+Alt+A" -> @{ Mods; Vk }. Teclas: A-Z, 0-9 o F1-F24. $null si "none"/invalido.
+    # "Ctrl+Alt+A" -> @{ Mods; Vk }. Teclas: A-Z, 0-9, F1-F24, flechas
+    # (Left/Right/Up/Down), Space o Tab. $null si "none"/invalido.
     if (-not $spec -or $spec.Trim().ToLower() -eq "none") { return $null }
+    $named = @{ LEFT = 0x25; UP = 0x26; RIGHT = 0x27; DOWN = 0x28; SPACE = 0x20; TAB = 0x09 }
     $mods = 0; $vk = 0
     foreach ($part in $spec -split "\+") {
         switch ($part.Trim().ToLower()) {
@@ -50,6 +62,7 @@ function ConvertTo-Hotkey([string]$spec) {
                 $k = $part.Trim().ToUpper()
                 if ($k -match "^[A-Z0-9]$") { $vk = [int][char]$k }
                 elseif ($k -match "^F([1-9]|1[0-9]|2[0-4])$") { $vk = 0x6F + [int]$Matches[1] }
+                elseif ($named.ContainsKey($k)) { $vk = $named[$k] }
                 else { return $null }
             }
         }
@@ -71,6 +84,8 @@ $GlyphGear  = [char]::ConvertFromUtf32(0x2699)    # engrane: trabajando
 $GlyphCheck = [char]::ConvertFromUtf32(0x2713)    # check: listo
 $GlyphPin   = [char]::ConvertFromUtf32(0x1F4CC)   # chincheta: fijar deck
 $GlyphHere  = [char]::ConvertFromUtf32(0x25C9)    # circulo relleno: estas aqui
+$GlyphPrev  = [char]::ConvertFromUtf32(0x25C0)    # triangulo izq: escritorio anterior
+$GlyphNext  = [char]::ConvertFromUtf32(0x25B6)    # triangulo der: escritorio siguiente
 
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -82,8 +97,8 @@ $xaml = @"
   <Border x:Name="Pill" CornerRadius="17" Background="#E5171D26"
           BorderBrush="#3A4656" BorderThickness="1" Padding="13,7">
     <StackPanel Orientation="Horizontal">
-      <TextBlock x:Name="TxtDesk" FontSize="12" FontWeight="SemiBold" Foreground="#8FA3B8"
-                 Margin="0,0,11,0" FontFamily="Segoe UI" Visibility="Collapsed"/>
+      <StackPanel x:Name="DeskBtns" Orientation="Horizontal" VerticalAlignment="Center"
+                  Margin="0,0,9,0"/>
       <TextBlock x:Name="TxtAttn"  FontSize="13" FontWeight="SemiBold" Foreground="#E0A33F" FontFamily="Segoe UI Emoji, Segoe UI"/>
       <TextBlock x:Name="TxtWork"  FontSize="13" FontWeight="SemiBold" Foreground="#5B9CD9" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
       <TextBlock x:Name="TxtReady" FontSize="13" FontWeight="SemiBold" Foreground="#3FB3A8" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
@@ -94,7 +109,7 @@ $xaml = @"
 
 $window   = [Windows.Markup.XamlReader]::Parse($xaml)
 $pill     = $window.FindName("Pill")
-$txtDesk  = $window.FindName("TxtDesk")
+$deskBtns = $window.FindName("DeskBtns")
 $txtAttn  = $window.FindName("TxtAttn")
 $txtWork  = $window.FindName("TxtWork")
 $txtReady = $window.FindName("TxtReady")
@@ -109,21 +124,32 @@ $BgAttn = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromA
 $BrAttn = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0xFF, 0xE0, 0xA3, 0x3F))
 
 # ---- Posicion ---------------------------------------------------------------
+# Con "pill.corner" en config.json la pastilla arranca en esa esquina (br, bl,
+# tr, tl); sin esa clave se usa la ultima posicion arrastrada (hud.json).
 $wa = [System.Windows.SystemParameters]::WorkArea
 $window.Left = $wa.Right - 250
 $window.Top  = $wa.Bottom - 56
-try {
-    $pos = Get-Content $PosFile -Raw | ConvertFrom-Json
-    $vl = [System.Windows.SystemParameters]::VirtualScreenLeft
-    $vt = [System.Windows.SystemParameters]::VirtualScreenTop
-    $vw = [System.Windows.SystemParameters]::VirtualScreenWidth
-    $vh = [System.Windows.SystemParameters]::VirtualScreenHeight
-    if ($pos.left -ge $vl -and $pos.left -lt ($vl + $vw - 60) -and
-        $pos.top  -ge $vt -and $pos.top  -lt ($vt + $vh - 30)) {
-        $window.Left = $pos.left
-        $window.Top  = $pos.top
+if ($PillCorner) {
+    switch ($PillCorner) {
+        "bl" { $window.Left = $wa.Left + 16;   $window.Top = $wa.Bottom - 56 }
+        "tr" { $window.Left = $wa.Right - 250; $window.Top = $wa.Top + 16 }
+        "tl" { $window.Left = $wa.Left + 16;   $window.Top = $wa.Top + 16 }
+        default { }  # "br" = valor inicial de arriba
     }
-} catch { }
+} else {
+    try {
+        $pos = Get-Content $PosFile -Raw | ConvertFrom-Json
+        $vl = [System.Windows.SystemParameters]::VirtualScreenLeft
+        $vt = [System.Windows.SystemParameters]::VirtualScreenTop
+        $vw = [System.Windows.SystemParameters]::VirtualScreenWidth
+        $vh = [System.Windows.SystemParameters]::VirtualScreenHeight
+        if ($pos.left -ge $vl -and $pos.left -lt ($vl + $vw - 60) -and
+            $pos.top  -ge $vt -and $pos.top  -lt ($vt + $vh - 30)) {
+            $window.Left = $pos.left
+            $window.Top  = $pos.top
+        }
+    } catch { }
+}
 
 $script:DeckPinned = $false
 try {
@@ -149,20 +175,35 @@ function Invoke-WinCtl([string]$ctlArgs) {
 function Open-Panel   { Invoke-WinCtl "-Action show-panel -HubUrl $HubUrl" }
 function Toggle-Panel { Invoke-WinCtl "-Action show-panel -Toggle -HubUrl $HubUrl" }
 
+# IMPORTANTE: fire-and-forget. Un POST sincrono desde un handler bloquea el
+# hilo de UI; si la accion cambia de escritorio, Windows necesita que las
+# ventanas ancladas (este HUD y el deck) procesen mensajes -> deadlock hasta
+# el timeout y el cambio nunca ocurre. Los errores los registra el hub.
 function Invoke-HubPost([string]$path, [string]$jsonBody) {
     try {
-        $req = [System.Net.WebRequest]::Create("$HubUrl$path")
-        $req.Method = "POST"; $req.ContentType = "application/json"; $req.Timeout = 5000
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonBody)
-        $req.ContentLength = $bytes.Length
-        $st = $req.GetRequestStream(); $st.Write($bytes, 0, $bytes.Length); $st.Close()
-        $req.GetResponse().Close()
-        return $true
+        $wc = New-Object System.Net.WebClient
+        $wc.Proxy = $null
+        $wc.Encoding = [System.Text.Encoding]::UTF8
+        $wc.Headers.Add("Content-Type", "application/json")
+        $wc.UploadStringAsync((New-Object System.Uri("$HubUrl$path")), "POST", $jsonBody)
     } catch {
         Write-HudLog "POST $path fallo: $_"
-        return $false
     }
 }
+
+# Acciones directas sobre VirtualDesktop.exe (sin pasar por el hub y sin
+# esperar: Start-Process no bloquea el hilo de UI)
+function Invoke-VDesk([string]$vArgs) {
+    $exe = Get-ChildItem -Path (Join-Path $RepoRoot "tools") -Filter "VirtualDesktop*.exe" |
+        Select-Object -First 1
+    if ($exe) { Start-Process -FilePath $exe.FullName -ArgumentList $vArgs -WindowStyle Hidden }
+    else { Write-HudLog "VirtualDesktop.exe no encontrado (tools\get-virtualdesktop.ps1)" }
+}
+
+function Go-Desktop([int]$n)  { Invoke-VDesk "/Switch:$n" }
+function Go-NextDesktop       { Invoke-VDesk "/Wrap /Right" }
+function Go-PrevDesktop       { Invoke-VDesk "/Wrap /Left" }
+function New-VirtualDesktop   { Invoke-VDesk "/New /Switch" }
 
 function Jump-Urgent {
     # Pide al hub saltar a la sesion que lleva mas tiempo esperando
@@ -229,15 +270,38 @@ function Update-Hud {
     $txtWork.Opacity  = if ($s.working -gt 0)   { 1.0 } else { 0.45 }
     $txtReady.Opacity = if ($s.ready -gt 0)     { 1.0 } else { 0.45 }
 
-    # Nombre del escritorio actual en la pastilla (ayuda-memoria al moverse)
-    $deskName = ""
-    if ($s.currentDesktop -and $s.currentDesktop.name) { $deskName = [string]$s.currentDesktop.name }
-    if ($deskName.Length -gt 16) { $deskName = $deskName.Substring(0, 15) + "~" }
-    if ($deskName) {
-        $txtDesk.Text = $deskName
-        $txtDesk.Visibility = "Visible"
-    } else {
-        $txtDesk.Visibility = "Collapsed"
+    # Botones por escritorio en la pastilla: numero (y nombre en el actual);
+    # un clic = ir a ese escritorio. Ambar si ese escritorio pide atencion.
+    $deskBtns.Children.Clear()
+    if ($s.deck) {
+        foreach ($d in $s.deck) {
+            if ($null -eq $d.num) { continue }
+            $isCur = [bool]$d.current
+            $urgent = [int]$d.needs_you -gt 0
+            $b = New-Object Windows.Controls.Border
+            $b.CornerRadius = 7; $b.Margin = "0,0,4,0"; $b.Cursor = "Hand"
+            $b.Padding = if ($isCur) { "7,1" } else { "6,1" }
+            $b.BorderThickness = 1
+            $b.Background  = if ($urgent) { $BgUrgent } elseif ($isCur) { $BgRowCur } else { $BgRow }
+            $b.BorderBrush = if ($urgent) { $ColAttn } elseif ($isCur) { $ColChrome } else { $ColInk3 }
+            $shortName = [string]$d.name
+            if ($shortName.Length -gt 9) { $shortName = $shortName.Substring(0, 8) + "~" }
+            $txt = if ($isCur) { "$($d.num + 1) $shortName" } else { "$($d.num + 1)" }
+            $tb = New-Object Windows.Controls.TextBlock
+            $tb.Text = $txt; $tb.FontSize = 11.5
+            $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI")
+            $tb.Foreground = if ($urgent) { $ColAttn } elseif ($isCur) { $ColInk } else { $ColInk2 }
+            if ($isCur -or $urgent) { $tb.FontWeight = "SemiBold" }
+            $b.Child = $tb
+            $b.ToolTip = "$($d.name): clic para ir"
+            $b.Tag = [int]$d.num
+            $b.Add_MouseLeftButtonDown({
+                param($src, $e)
+                $e.Handled = $true   # que no arranque el arrastre de la pastilla
+                Go-Desktop ([int]$src.Tag)
+            })
+            [void]$deskBtns.Children.Add($b)
+        }
     }
 
     if ($s.needs_you -gt 0) {
@@ -320,18 +384,39 @@ function Update-Deck($s) {
     if (-not $deck.IsVisible) { return }
     $deckStack.Children.Clear()
 
-    # Cabecera: total de escritorios + boton de fijado
+    # Cabecera: navegacion (anterior/siguiente/nuevo), total y boton de fijado
     $head = New-Object Windows.Controls.DockPanel
     $head.Margin = "2,0,2,6"
     $title = if ($s -and $s.desktopCount) { "$($s.desktopCount) escritorios" } else { "Escritorios" }
     $ht = New-DeckText $title $ColInk 12.5 0 $true
+
     $pinText = if ($script:DeckPinned) { "$GlyphPin fijado" } else { "$GlyphPin fijar" }
     $pinBtn = New-DeckText $pinText $(if ($script:DeckPinned) { $ColChrome } else { $ColInk3 }) 11.5 0 $false
-    $pinBtn.Cursor = "Hand"; $pinBtn.Margin = "18,0,0,0"
+    $pinBtn.Cursor = "Hand"; $pinBtn.Margin = "14,0,0,0"
     $pinBtn.ToolTip = "Fijado: el deck queda siempre visible (translucido en reposo)"
     $pinBtn.Add_MouseLeftButtonUp({ Toggle-DeckPin })
+
+    $navPrev = New-DeckText $GlyphPrev $ColChrome 11.5 0 $false
+    $navPrev.Cursor = "Hand"; $navPrev.Margin = "14,0,0,0"
+    $navPrev.ToolTip = "Escritorio anterior (con vuelta)"
+    $navPrev.Add_MouseLeftButtonUp({ Go-PrevDesktop })
+    $navNext = New-DeckText $GlyphNext $ColChrome 11.5 0 $false
+    $navNext.Cursor = "Hand"; $navNext.Margin = "10,0,0,0"
+    $navNext.ToolTip = "Escritorio siguiente (con vuelta)"
+    $navNext.Add_MouseLeftButtonUp({ Go-NextDesktop })
+    $navNew = New-DeckText "+" $ColInk3 12.5 0 $true
+    $navNew.Cursor = "Hand"; $navNew.Margin = "12,0,0,0"
+    $navNew.ToolTip = "Crear un escritorio nuevo e ir a el"
+    $navNew.Add_MouseLeftButtonUp({ New-VirtualDesktop })
+
     [Windows.Controls.DockPanel]::SetDock($pinBtn, "Right")
+    [Windows.Controls.DockPanel]::SetDock($navNew, "Right")
+    [Windows.Controls.DockPanel]::SetDock($navNext, "Right")
+    [Windows.Controls.DockPanel]::SetDock($navPrev, "Right")
     [void]$head.Children.Add($pinBtn)
+    [void]$head.Children.Add($navNew)
+    [void]$head.Children.Add($navNext)
+    [void]$head.Children.Add($navPrev)
     [void]$head.Children.Add($ht)
     [void]$deckStack.Children.Add($head)
 
@@ -374,7 +459,7 @@ function Update-Deck($s) {
             $dd = $d
             $row.ToolTip = "Clic: ir a este escritorio - Clic derecho: renombrarlo"
             $row.Add_MouseLeftButtonUp({
-                [void](Invoke-HubPost "/api/desktops/switch" "{`"desktop`":$num}")
+                Go-Desktop $num
             }.GetNewClosure())
             $row.Add_MouseRightButtonUp({
                 Start-DeckRename $dd $row
@@ -451,10 +536,10 @@ $window.Add_MouseLeftButtonDown({
 
 $menu = New-Object System.Windows.Controls.ContextMenu
 $miPanel = New-Object System.Windows.Controls.MenuItem
-$miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = $HotkeyTogglePanel
+$miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = $Hotkeys.togglePanel
 $miPanel.Add_Click({ Toggle-Panel })
 $miJump = New-Object System.Windows.Controls.MenuItem
-$miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = $HotkeyJumpUrgent
+$miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = $Hotkeys.jumpUrgent
 $miJump.Add_Click({ Jump-Urgent })
 $miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
 $miPin.Add_Click({ Pin-ToAllDesktops })
@@ -474,6 +559,10 @@ $HotkeyHook = {
         switch ($wParam.ToInt32()) {
             1 { Toggle-Panel }
             2 { Jump-Urgent }
+            3 { Go-NextDesktop }
+            4 { Go-PrevDesktop }
+            5 { New-VirtualDesktop }
+            6 { Toggle-DeckPin }
         }
         $handled.Value = $true
     }
@@ -486,13 +575,19 @@ function Register-Hotkeys {
         $script:HwndSource = [System.Windows.Interop.HwndSource]::FromHwnd($helper.Handle)
         $script:HwndSource.AddHook($HotkeyHook)
         $wanted = @(
-            @{ Id = 1; Spec = $HotkeyTogglePanel; Name = "mostrar/ocultar panel" },
-            @{ Id = 2; Spec = $HotkeyJumpUrgent;  Name = "salto urgente" }
+            @{ Id = 1; Spec = $Hotkeys.togglePanel; Name = "mostrar/ocultar panel" },
+            @{ Id = 2; Spec = $Hotkeys.jumpUrgent;  Name = "salto urgente" },
+            @{ Id = 3; Spec = $Hotkeys.nextDesktop; Name = "escritorio siguiente" },
+            @{ Id = 4; Spec = $Hotkeys.prevDesktop; Name = "escritorio anterior" },
+            @{ Id = 5; Spec = $Hotkeys.newDesktop;  Name = "escritorio nuevo" },
+            @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "fijar/soltar deck" }
         )
         foreach ($hk in $wanted) {
             $parsed = ConvertTo-Hotkey $hk.Spec
             if ($null -eq $parsed) {
-                Write-HudLog "hotkey $($hk.Name): desactivado o invalido ('$($hk.Spec)')"
+                if ($hk.Spec -and $hk.Spec.Trim().ToLower() -ne "none") {
+                    Write-HudLog "hotkey $($hk.Name): spec invalida ('$($hk.Spec)')"
+                }
                 continue
             }
             if (-not [AtalayaHotkey]::RegisterHotKey($helper.Handle, $hk.Id, $parsed.Mods, $parsed.Vk)) {
@@ -526,8 +621,7 @@ $window.Add_Closed({
     Save-Position
     try {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
-        [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, 1)
-        [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, 2)
+        foreach ($hkId in 1..6) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
     } catch { }
     try { Remove-Item (Join-Path $StateDir "hud.pid") -Force } catch { }
 })

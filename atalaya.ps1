@@ -84,11 +84,15 @@ if (-not (Test-Path $wsFile)) {
     Write-Host "Creado workspaces.json inicial: edita ahi tus proyectos/escritorios."
 }
 
-# Config del usuario (hotkeys, etc.) con valores por defecto
+# Config del usuario (hotkeys, pildora) con valores por defecto; tambien
+# editable desde el panel (seccion Ajustes)
 $cfgFile = Join-Path $StateDir "config.json"
 if (-not (Test-Path $cfgFile)) {
-    Set-Content -Path $cfgFile -Value '{ "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J" } }'
-    Write-Host "Creado $cfgFile (hotkeys configurables; 'none' desactiva)."
+    $defaultCfg = '{ "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J", ' +
+        '"nextDesktop": "Ctrl+Alt+Right", "prevDesktop": "Ctrl+Alt+Left", ' +
+        '"newDesktop": "none", "toggleDeck": "none" }, "pill": { "corner": "" } }'
+    Set-Content -Path $cfgFile -Value $defaultCfg
+    Write-Host "Creado $cfgFile (hotkeys y pildora configurables; 'none' desactiva)."
 }
 
 if (-not (Test-Hub)) {

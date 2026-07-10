@@ -128,6 +128,24 @@
   }
   .note-form button:hover { border-color: var(--chrome); color: var(--chrome); }
   .updated { margin-top: 20px; color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
+
+  #settings { margin-top: 22px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 14px; }
+  #settings summary { cursor: pointer; font: 600 12.5px var(--ui); color: var(--ink-2); }
+  .set-grid { display: grid; gap: 10px 18px; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); margin: 12px 2px 4px; }
+  .set-grid label { display: flex; flex-direction: column; gap: 4px; font: 600 11.5px var(--ui); color: var(--ink-2); }
+  .set-grid input, .set-grid select {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 6px; padding: 5px 8px; font: 12px var(--mono);
+  }
+  .set-help { margin: 8px 2px; font-size: 11px; color: var(--ink-3); }
+  .set-help code { font-family: var(--mono); }
+  .set-actions { display: flex; align-items: center; gap: 10px; margin: 6px 2px 4px; }
+  .set-actions button {
+    border: 1px solid var(--line); background: var(--panel); color: var(--chrome);
+    border-radius: 6px; padding: 6px 14px; font: 600 12.5px var(--ui); cursor: pointer;
+  }
+  .set-actions button:hover { border-color: var(--chrome); }
+  #setStatus { font-size: 11.5px; color: var(--ink-3); }
 </style>
 </head>
 <body>
@@ -148,6 +166,35 @@
 
 <div class="frame">
   <div class="desktops" id="board"></div>
+
+  <details id="settings">
+    <summary>⚙ Ajustes (hotkeys y píldora)</summary>
+    <div class="set-grid">
+      <label>Mostrar/ocultar panel <input data-hk="togglePanel" placeholder="Ctrl+Alt+A"></label>
+      <label>Ir a sesión urgente <input data-hk="jumpUrgent" placeholder="Ctrl+Alt+J"></label>
+      <label>Escritorio siguiente <input data-hk="nextDesktop" placeholder="Ctrl+Alt+Right"></label>
+      <label>Escritorio anterior <input data-hk="prevDesktop" placeholder="Ctrl+Alt+Left"></label>
+      <label>Escritorio nuevo <input data-hk="newDesktop" placeholder="none"></label>
+      <label>Fijar/soltar deck <input data-hk="toggleDeck" placeholder="none"></label>
+      <label>Esquina de la píldora
+        <select id="setCorner">
+          <option value="">libre (recordar arrastre)</option>
+          <option value="br">inferior derecha</option>
+          <option value="bl">inferior izquierda</option>
+          <option value="tr">superior derecha</option>
+          <option value="tl">superior izquierda</option>
+        </select>
+      </label>
+    </div>
+    <p class="set-help">Modificadores: Ctrl, Alt, Shift, Win · teclas: A–Z, 0–9, F1–F24,
+      Left/Right/Up/Down, Space, Tab · <code>none</code> desactiva. La píldora también
+      se puede arrastrar con el mouse.</p>
+    <div class="set-actions">
+      <button id="setSave">Guardar y reiniciar HUD</button>
+      <span id="setStatus"></span>
+    </div>
+  </details>
+
   <p class="updated" id="updated"></p>
 </div>
 
@@ -156,7 +203,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.5.0";
+const UI_VERSION = "0.6.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -182,6 +229,18 @@ async function fetchDeskInfo() {
   }
   render();
 }
+
+// Lista completa de escritorios (para mostrar también los vacíos)
+let allDesktops = [];
+async function fetchDesktops() {
+  try {
+    const r = await fetch("/api/desktops");
+    allDesktops = (await r.json()).desktops || [];
+    render();
+  } catch { /* siguiente intento */ }
+}
+fetchDesktops();
+setInterval(fetchDesktops, 15000);
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -344,6 +403,7 @@ function groupSessions() {
     }
     return groups.get(key);
   };
+  for (const d of allDesktops) addGroup(d.num, d.name);
   for (const s of state.sessions) {
     const known = s.desktopNum !== null && s.desktopNum !== undefined;
     addGroup(known ? s.desktopNum : null, known ? s.desktopName : null).items.push(s);
@@ -523,6 +583,37 @@ setInterval(() => {
   });
 }, 30000);
 
+// ── Ajustes (config.json vía hub; el HUD se reinicia para aplicar) ──────────
+const settingsEl = document.getElementById("settings");
+settingsEl.addEventListener("toggle", async () => {
+  if (!settingsEl.open) return;
+  try {
+    const cfg = await (await fetch("/api/config")).json();
+    document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
+      inp.value = (cfg.hotkeys && cfg.hotkeys[inp.dataset.hk]) || "";
+    });
+    document.getElementById("setCorner").value = (cfg.pill && cfg.pill.corner) || "";
+  } catch { /* hub caído: se queda vacío */ }
+});
+document.getElementById("setSave").addEventListener("click", async () => {
+  const status = document.getElementById("setStatus");
+  const hotkeys = {};
+  document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
+    if (inp.value.trim()) hotkeys[inp.dataset.hk] = inp.value.trim();
+  });
+  const pill = { corner: document.getElementById("setCorner").value };
+  status.textContent = "guardando…";
+  try {
+    const r = await postJson("/api/config", { hotkeys, pill });
+    if (!r.ok) throw new Error();
+    await postJson("/api/hud/restart", {});
+    status.textContent = "✓ guardado; HUD reiniciándose";
+  } catch {
+    status.textContent = "✕ no se pudo guardar";
+  }
+  setTimeout(() => { status.textContent = ""; }, 4000);
+});
+
 // Al volver al panel, refrescar para actualizar el marcador "aquí"
 // (el usuario pudo cambiar de escritorio sin que hubiera eventos de sesión)
 window.addEventListener("focus", async () => {
@@ -532,6 +623,7 @@ window.addEventListener("focus", async () => {
     render();
   } catch { /* SSE sigue mandando */ }
   if (viewAll) fetchDeskInfo();
+  fetchDesktops();
 });
 
 // SSE con reconexión
