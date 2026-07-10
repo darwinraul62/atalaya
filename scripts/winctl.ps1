@@ -147,9 +147,11 @@ switch ($Action) {
     "show-panel" {
         $h = [AtalayaWin]::FindExact($PanelTitle, $PanelClassPrefix)
         if ($h -eq 0) {
-            $edgeArgs = "--app=$HubUrl/"
+            # URL unica por lanzamiento: Edge no puede reutilizar HTML cacheado
+            $bust = [DateTime]::UtcNow.Ticks
+            $edgeArgs = "--app=$HubUrl/?v=$bust"
             if ($Max) { $edgeArgs = "--start-maximized $edgeArgs" }
-            try { Start-Process "msedge" $edgeArgs } catch { Start-Process "$HubUrl/" }
+            try { Start-Process "msedge" $edgeArgs } catch { Start-Process "$HubUrl/?v=$bust" }
             Write-Output '{"ok":true,"launched":true}'
             break
         }

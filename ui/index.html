@@ -208,7 +208,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.7.0";
+const UI_VERSION = "0.7.1";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -681,7 +681,8 @@ function connect() {
       if (state.hubVersion && state.hubVersion !== UI_VERSION &&
           sessionStorage.atalayaReloadedFor !== state.hubVersion) {
         sessionStorage.atalayaReloadedFor = state.hubVersion;
-        location.reload();
+        // URL con la versión: evita que la recarga sirva HTML cacheado viejo
+        location.replace("/?v=" + encodeURIComponent(state.hubVersion));
         return;
       }
       render();

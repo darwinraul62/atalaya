@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.7.0";
+const VERSION = "0.7.1";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -664,9 +664,21 @@ const server = http.createServer(async (req, res) => {
 
   if (route === "GET /" || route === "GET /index.html") {
     try {
-      // no-cache: sin esto Edge puede cachear la UI y quedarse con JS viejo
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
-      res.end(fs.readFileSync(UI_FILE));
+      // Anti-caché en capas: Edge cacheaba la UI y el usuario se quedaba con
+      // JS viejo. no-store + ETag por versión; además el panel navega con
+      // /?v=<versión> (URL distinta = caché imposible de reutilizar).
+      const body = fs.readFileSync(UI_FILE);
+      const etag = `"atalaya-${VERSION}"`;
+      if (req.headers["if-none-match"] === etag) {
+        res.writeHead(304, { ETag: etag });
+        return res.end();
+      }
+      res.writeHead(200, {
+        "Content-Type": "text/html; charset=utf-8",
+        "Cache-Control": "no-store",
+        ETag: etag,
+      });
+      res.end(body);
     } catch {
       res.writeHead(500);
       res.end("No se encontró ui/index.html");
