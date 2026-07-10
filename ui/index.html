@@ -64,7 +64,9 @@
   .chip.attn { color: var(--attn); } .chip.work { color: var(--work); }
   .chip.ready { color: var(--ready); } .chip.idle { color: var(--idle); }
 
-  .desktops { display: grid; gap: 16px; margin-top: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  /* auto-fit + ancho acotado + justify-content: en pantallas anchas las
+     columnas no se estiran de más y el conjunto queda CENTRADO */
+  .desktops { display: grid; gap: 16px; margin-top: 20px; grid-template-columns: repeat(auto-fit, minmax(320px, 430px)); justify-content: center; }
   /* Modo "una fila": todos los escritorios como columnas con scroll horizontal */
   .desktops.row { display: flex; flex-wrap: nowrap; align-items: flex-start; overflow-x: auto; padding-bottom: 10px; }
   /* Crecen para llenar el ancho; solo hay scroll cuando de verdad no caben */
@@ -260,7 +262,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.9.0";
+const UI_VERSION = "0.9.1";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
