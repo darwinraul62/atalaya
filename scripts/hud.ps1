@@ -37,12 +37,14 @@ $Hotkeys = @{
     toggleDeck  = "none"
 }
 $PillCorner = ""
+$MaxPins = 3
 try {
     $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
     foreach ($k in @($Hotkeys.Keys)) {
         if ($cfg.hotkeys.$k) { $Hotkeys[$k] = [string]$cfg.hotkeys.$k }
     }
     if ($cfg.pill.corner) { $PillCorner = [string]$cfg.pill.corner }
+    if ($null -ne $cfg.pill.maxPins) { $MaxPins = [int]$cfg.pill.maxPins }
 } catch { }
 
 function ConvertTo-Hotkey([string]$spec) {
@@ -343,10 +345,14 @@ function Update-Hud {
         }
     }
 
-    # Sesiones pineadas (estrella): acceso de un clic a puntos importantes
+    # Sesiones pineadas (estrella): acceso de un clic a puntos importantes.
+    # Tope configurable (pill.maxPins, defecto 3) priorizando las urgentes;
+    # la vista [estrella] del deck siempre muestra todas.
     $pinBtns.Children.Clear()
-    if ($s.pinned) {
-        foreach ($p in $s.pinned) {
+    if ($s.pinned -and $MaxPins -gt 0) {
+        $pinList = @($s.pinned | Sort-Object { if ($_.status -eq "needs_you") { 0 } else { 1 } })
+        if ($pinList.Count -gt $MaxPins) { $pinList = $pinList[0..($MaxPins - 1)] }
+        foreach ($p in $pinList) {
             $urgent = $p.status -eq "needs_you"
             $b = New-Object Windows.Controls.Border
             $b.CornerRadius = 7; $b.Margin = "0,0,4,0"; $b.Cursor = "Hand"

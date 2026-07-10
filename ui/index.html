@@ -29,10 +29,10 @@
     background: var(--bg); color: var(--ink); font: 14px/1.45 var(--ui);
     padding-bottom: 48px;
   }
-  .frame { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
+  .frame { max-width: 2100px; margin: 0 auto; padding: 0 24px; }
 
   header.bar { background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
-  .bar-inner { max-width: 1060px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .bar-inner { max-width: 2100px; margin: 0 auto; padding: 10px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .brand { display: flex; align-items: baseline; gap: 10px; }
   .brand strong { font-size: 17px; font-weight: 650; }
   .brand span { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase; }
@@ -56,6 +56,9 @@
   .chip.ready { color: var(--ready); } .chip.idle { color: var(--idle); }
 
   .desktops { display: grid; gap: 16px; margin-top: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  /* Modo "una fila": todos los escritorios como columnas con scroll horizontal */
+  .desktops.row { display: flex; flex-wrap: nowrap; align-items: flex-start; overflow-x: auto; padding-bottom: 10px; }
+  .desktops.row .desktop { flex: 0 0 335px; }
   .desktop { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; align-self: start; }
   .desktop-h { display: flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--ink-2); flex-wrap: wrap; }
   .desktop-h .key { font-family: var(--mono); font-size: 11px; font-weight: 600; border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; background: var(--panel); }
@@ -160,6 +163,8 @@
     <div class="chips" role="group" aria-label="Filtrar por estado" id="chips">
       <button class="chip" id="viewToggle" aria-pressed="false"
         title="Mostrar también las demás ventanas de cada escritorio">🖥 Ventanas</button>
+      <button class="chip" id="layoutToggle"
+        title="Alternar entre cuadrícula (columnas y filas según el espacio) y una sola fila con scroll">⊞ Cuadrícula</button>
       <button class="chip attn" data-f="needs_you" aria-pressed="false">🔔 Te necesita <span class="n">0</span></button>
       <button class="chip work" data-f="working" aria-pressed="false">⚙ Trabajando <span class="n">0</span></button>
       <button class="chip ready" data-f="ready" aria-pressed="false">✓ Listo <span class="n">0</span></button>
@@ -189,6 +194,16 @@
           <option value="tl">superior izquierda</option>
         </select>
       </label>
+      <label>Máx. ★ favoritos en la píldora
+        <select id="setMaxPins">
+          <option value="0">0 (solo en el deck)</option>
+          <option value="1">1</option>
+          <option value="2">2</option>
+          <option value="3" selected>3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+        </select>
+      </label>
     </div>
     <p class="set-help">Haz clic en un campo y <strong>pulsa la combinación</strong>
       (requiere Ctrl/Alt/Shift/Win + una tecla) · <kbd>Esc</kbd> = desactivar (none) ·
@@ -208,7 +223,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.7.1";
+const UI_VERSION = "0.8.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -582,6 +597,20 @@ document.querySelectorAll("#chips .chip[data-f]").forEach((chip) => {
   });
 });
 
+// Layout de escritorios: cuadrícula (según espacio) o una sola fila
+let layoutRow = localStorage.getItem("atalayaLayout") === "row";
+const layoutToggle = document.getElementById("layoutToggle");
+function applyLayout() {
+  document.getElementById("board").classList.toggle("row", layoutRow);
+  layoutToggle.textContent = layoutRow ? "▭ Una fila" : "⊞ Cuadrícula";
+}
+layoutToggle.addEventListener("click", () => {
+  layoutRow = !layoutRow;
+  localStorage.setItem("atalayaLayout", layoutRow ? "row" : "grid");
+  applyLayout();
+});
+applyLayout();
+
 const viewToggle = document.getElementById("viewToggle");
 function syncViewToggle() {
   viewToggle.setAttribute("aria-pressed", String(viewAll));
@@ -638,6 +667,8 @@ settingsEl.addEventListener("toggle", async () => {
       inp.value = (cfg.hotkeys && cfg.hotkeys[inp.dataset.hk]) || "";
     });
     document.getElementById("setCorner").value = (cfg.pill && cfg.pill.corner) || "";
+    document.getElementById("setMaxPins").value =
+      cfg.pill && cfg.pill.maxPins !== undefined ? String(cfg.pill.maxPins) : "3";
   } catch { /* hub caído: se queda vacío */ }
 });
 document.getElementById("setSave").addEventListener("click", async () => {
@@ -646,7 +677,10 @@ document.getElementById("setSave").addEventListener("click", async () => {
   document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
     if (inp.value.trim()) hotkeys[inp.dataset.hk] = inp.value.trim();
   });
-  const pill = { corner: document.getElementById("setCorner").value };
+  const pill = {
+    corner: document.getElementById("setCorner").value,
+    maxPins: Number(document.getElementById("setMaxPins").value),
+  };
   status.textContent = "guardando…";
   try {
     const r = await postJson("/api/config", { hotkeys, pill });

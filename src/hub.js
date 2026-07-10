@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.7.1";
+const VERSION = "0.8.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -809,6 +809,10 @@ const server = http.createServer(async (req, res) => {
       if (body.pill.corner !== undefined) {
         const c = String(body.pill.corner);
         cfg.pill.corner = ["br", "bl", "tr", "tl"].includes(c) ? c : "";
+      }
+      if (body.pill.maxPins !== undefined) {
+        const n = Number(body.pill.maxPins);
+        cfg.pill.maxPins = Number.isInteger(n) && n >= 0 && n <= 9 ? n : 3;
       }
     }
     try {

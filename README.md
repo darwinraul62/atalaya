@@ -59,7 +59,8 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
 - **HUD (píldora)**: un **botón por escritorio** (número; el actual muestra
   además su nombre; ámbar si pide atención) — un clic y estás ahí. Después,
   las **sesiones importantes** (★, marcadas desde el panel) con salto de un
-  clic. Los contadores 🔔/⚙/✓ también son botones: clic = ir a la sesión que
+  clic; se muestran como máximo 3 (configurable en Ajustes, prioridad a las
+  que piden atención; el deck siempre lista todas). Los contadores 🔔/⚙/✓ también son botones: clic = ir a la sesión que
   **más tiempo lleva** en ese estado (enfoca su ventana; si no puede, cambia
   a su escritorio). El 📡 abre Atalaya en **máximo foco**: maximizada y
   enfocada en el monitor donde la dejaste. Doble clic = abrir panel ·
@@ -95,6 +96,8 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
     La preferencia se recuerda. Por defecto el panel se mantiene enfocado
     solo en agentes. (Los iconos se extraen del ejecutable y se cachean en
     `%USERPROFILE%\.atalaya\icons\`.)
+  - Chip **⊞/▭**: alterna el tablero entre cuadrícula (columnas y filas según
+    el espacio disponible) y una sola fila con scroll horizontal.
   - Chips de estado filtran; caja de "Notas" para pendientes manuales.
 - **Hotkeys globales** (funcionan desde cualquier app mientras el HUD corre):
 
