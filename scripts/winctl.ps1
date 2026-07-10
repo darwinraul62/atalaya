@@ -16,6 +16,7 @@ param(
     [long]$Hwnd = 0,
     [int]$ProcId = 0,
     [switch]$Toggle,
+    [switch]$Max,
     [string]$HubUrl = "http://127.0.0.1:4777"
 )
 
@@ -81,6 +82,7 @@ public static class AtalayaWin {
     }
 
     public static void Minimize(long h) { ShowWindow(new IntPtr(h), 6); } // SW_MINIMIZE
+    public static void Maximize(long h) { ShowWindow(new IntPtr(h), 3); } // SW_MAXIMIZE
 
     [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int idx);
     [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
@@ -145,7 +147,9 @@ switch ($Action) {
     "show-panel" {
         $h = [AtalayaWin]::FindExact($PanelTitle, $PanelClassPrefix)
         if ($h -eq 0) {
-            try { Start-Process "msedge" "--app=$HubUrl/" } catch { Start-Process "$HubUrl/" }
+            $edgeArgs = "--app=$HubUrl/"
+            if ($Max) { $edgeArgs = "--start-maximized $edgeArgs" }
+            try { Start-Process "msedge" $edgeArgs } catch { Start-Process "$HubUrl/" }
             Write-Output '{"ok":true,"launched":true}'
             break
         }
@@ -154,9 +158,12 @@ switch ($Action) {
             Write-Output '{"ok":true,"minimized":true}'
             break
         }
-        # Modo quake: traer el panel al escritorio actual y enfocarlo
+        # Modo quake: traer el panel al escritorio actual y enfocarlo.
+        # Con -Max ("maximo foco"): ademas maximizado en el monitor donde el
+        # usuario lo dejo la ultima vez.
         $vd = Get-VDeskExe
         if ($vd) { & $vd "/GetCurrentDesktop" "/MoveWindowHandle:$h" | Out-Null }
+        if ($Max) { [AtalayaWin]::Maximize($h) }
         [void][AtalayaWin]::Focus($h)
         Write-Output '{"ok":true}'
     }

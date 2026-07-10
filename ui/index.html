@@ -84,6 +84,10 @@
   button.edit { border: none; background: none; color: var(--ink-3); cursor: pointer; font-size: 12px; line-height: 1; padding: 1px 3px; opacity: .5; }
   .card:hover button.edit, button.edit:focus-visible { opacity: 1; }
   button.edit:hover { color: var(--chrome); }
+  button.star { border: none; background: none; color: var(--ink-3); cursor: pointer; font-size: 14px; line-height: 1; padding: 1px 3px; opacity: .5; }
+  .card:hover button.star, button.star:focus-visible, button.star.on { opacity: 1; }
+  button.star.on { color: var(--attn); }
+  button.star:hover { color: var(--attn); }
   input.label-edit {
     border: 1px solid var(--chrome); background: var(--panel); color: var(--ink);
     border-radius: 5px; padding: 2px 7px; font: 600 13px var(--ui); width: 190px;
@@ -186,9 +190,10 @@
         </select>
       </label>
     </div>
-    <p class="set-help">Modificadores: Ctrl, Alt, Shift, Win · teclas: A–Z, 0–9, F1–F24,
-      Left/Right/Up/Down, Space, Tab · <code>none</code> desactiva. La píldora también
-      se puede arrastrar con el mouse.</p>
+    <p class="set-help">Haz clic en un campo y <strong>pulsa la combinación</strong>
+      (requiere Ctrl/Alt/Shift/Win + una tecla) · <kbd>Esc</kbd> = desactivar (none) ·
+      <kbd>Retroceso</kbd> = vaciar (usa el valor por defecto). La píldora también se
+      puede arrastrar con el mouse.</p>
     <div class="set-actions">
       <button id="setSave">Guardar y reiniciar HUD</button>
       <span id="setStatus"></span>
@@ -203,7 +208,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.6.0";
+const UI_VERSION = "0.7.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -301,10 +306,11 @@ function sessionCard(s) {
       if (done) return;
       done = true;
       await postJson("/api/sessions/label", { cwd: s.cwd, label: input.value.trim() });
+      setTimeout(() => { input.blur(); render(); }, 350);
     };
     input.addEventListener("keydown", (e) => {
       if (e.key === "Enter") save();
-      else if (e.key === "Escape") { done = true; render(); }
+      else if (e.key === "Escape") { done = true; input.blur(); render(); }
     });
     input.addEventListener("blur", () => { if (!done) { done = true; render(); } });
   });
@@ -314,6 +320,16 @@ function sessionCard(s) {
   top.append(el("span", "clone", clone));
   if (s.host === "wsl") top.append(el("span", "host", "WSL"));
   top.append(el("span", "agent", s.agent || "agente"));
+
+  // Importante (estrella): la sesión aparece en la píldora y en el deck
+  const star = el("button", "star" + (s.starred ? " on" : ""), s.starred ? "★" : "☆");
+  star.title = s.starred
+    ? "Quitar de importantes"
+    : "Marcar como importante: acceso de un clic desde la píldora y el deck";
+  star.addEventListener("click", () =>
+    postJson("/api/sessions/pin", { sessionId: s.sessionId, pinned: !s.starred })
+  );
+  top.append(star);
   card.append(top);
 
   if (s.task) card.append(el("div", "task", s.task));
@@ -436,6 +452,10 @@ function groupSessions() {
 
 function render() {
   const board = document.getElementById("board");
+  // No repintar mientras se escribe (etiquetas, renombrado de escritorio,
+  // notas): el re-render destruiría la caja de texto a mitad de edición.
+  const ae = document.activeElement;
+  if (ae && ae.tagName === "INPUT" && board.contains(ae)) return;
   board.replaceChildren();
 
   const here = state.currentDesktop;
@@ -464,7 +484,8 @@ function render() {
             done = true;
             await postJson("/api/desktops/name", { desktop: g.num, name: input.value.trim() });
             if (viewAll) fetchDeskInfo();
-          } else if (e.key === "Escape") { done = true; render(); }
+            setTimeout(() => { input.blur(); fetchDesktops(); }, 350);
+          } else if (e.key === "Escape") { done = true; input.blur(); render(); }
         });
         input.addEventListener("blur", () => { if (!done) { done = true; render(); } });
       });
@@ -584,6 +605,30 @@ setInterval(() => {
 }, 30000);
 
 // ── Ajustes (config.json vía hub; el HUD se reinicia para aplicar) ──────────
+// Los campos de hotkey CAPTURAN la combinación pulsada (no se escribe a mano):
+// imposible guardar una spec inválida.
+document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
+  inp.readOnly = true;
+  inp.addEventListener("keydown", (e) => {
+    e.preventDefault();
+    if (e.key === "Escape") { inp.value = "none"; return; }
+    if (e.key === "Backspace" || e.key === "Delete") { inp.value = ""; return; }
+    const mods = [];
+    if (e.ctrlKey) mods.push("Ctrl");
+    if (e.altKey) mods.push("Alt");
+    if (e.shiftKey) mods.push("Shift");
+    if (e.metaKey) mods.push("Win");
+    let key = null;
+    if (/^[a-z0-9]$/i.test(e.key)) key = e.key.toUpperCase();
+    else if (/^F([1-9]|1\d|2[0-4])$/.test(e.key)) key = e.key;
+    else if (e.key.startsWith("Arrow")) key = e.key.slice(5);
+    else if (e.key === " ") key = "Space";
+    else if (e.key === "Tab") key = "Tab";
+    if (!key || !mods.length) return; // modificador solo o tecla no soportada
+    inp.value = mods.join("+") + "+" + key;
+  });
+});
+
 const settingsEl = document.getElementById("settings");
 settingsEl.addEventListener("toggle", async () => {
   if (!settingsEl.open) return;

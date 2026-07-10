@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.6.0";
+const VERSION = "0.7.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -36,6 +36,7 @@ const WINDOWS_FILE = path.join(STATE_DIR, "windows.json");
 const LABELS_FILE = path.join(STATE_DIR, "labels.json");
 const ICONS_DIR = path.join(STATE_DIR, "icons");
 const CONFIG_FILE = path.join(STATE_DIR, "config.json");
+const PINS_FILE = path.join(STATE_DIR, "pins.json");
 const HUD_PS1 = path.join(REPO_ROOT, "scripts", "hud.ps1");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
 const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"];
@@ -178,6 +179,25 @@ function saveLabels(map) {
     fs.writeFileSync(LABELS_FILE, JSON.stringify(map, null, 2));
   } catch (e) {
     log(`labels.json error: ${e.message}`);
+  }
+}
+
+// ── Sesiones importantes (pineadas por el usuario desde el panel) ───────────
+
+function loadPins() {
+  try {
+    const arr = JSON.parse(fs.readFileSync(PINS_FILE, "utf8"));
+    return Array.isArray(arr) ? arr : [];
+  } catch {
+    return [];
+  }
+}
+
+function savePins(arr) {
+  try {
+    fs.writeFileSync(PINS_FILE, JSON.stringify(arr, null, 2));
+  } catch (e) {
+    log(`pins.json error: ${e.message}`);
   }
 }
 
@@ -334,6 +354,7 @@ function loadSessions() {
   const workspaces = loadWorkspaces();
   const windows = loadWindows();
   const labels = loadLabels();
+  const pins = new Set(loadPins());
   const sessions = [];
   let files = [];
   try {
@@ -358,6 +379,7 @@ function loadSessions() {
       s.desktopNum = w && w.desktop !== null && w.desktop !== undefined ? w.desktop : null;
       s.desktopName = w ? w.desktopName || null : null;
       s.label = labels[normPath(s.cwd)] || null;
+      s.starred = pins.has(s.sessionId);
       sessions.push(s);
     } catch {
       /* ficha corrupta o a medio escribir: se ignora */
@@ -390,7 +412,7 @@ function purgeOldSessions() {
       }
     }
   }
-  // Ventanas huérfanas: fuera las de sesiones que ya no tienen ficha
+  // Ventanas y pins huérfanos: fuera los de sesiones que ya no tienen ficha
   try {
     const alive = new Set(
       fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5))
@@ -404,6 +426,9 @@ function purgeOldSessions() {
       }
     }
     if (changed) saveWindows(map);
+    const pins = loadPins();
+    const keep = pins.filter((id) => alive.has(id));
+    if (keep.length !== pins.length) savePins(keep);
   } catch {
     /* opcional */
   }
@@ -509,6 +534,17 @@ async function buildGlanceSummary() {
   summary.deck = deskList.map((d) => entry(d.num, d.name, byDesk.get(d.num) || []));
   const loose = byDesk.get(-1) || [];
   if (loose.length) summary.deck.push(entry(null, "sin escritorio", loose));
+
+  // Sesiones importantes (estrella): acceso directo desde la píldora y el deck
+  summary.pinned = payload.sessions
+    .filter((s) => s.starred)
+    .map((s) => ({
+      sessionId: s.sessionId,
+      label: s.label || s.project,
+      status: s.status,
+      task: s.task || null,
+      desktopName: s.desktopName || null,
+    }));
   return summary;
 }
 
@@ -628,7 +664,8 @@ const server = http.createServer(async (req, res) => {
 
   if (route === "GET /" || route === "GET /index.html") {
     try {
-      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      // no-cache: sin esto Edge puede cachear la UI y quedarse con JS viejo
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8", "Cache-Control": "no-cache" });
       res.end(fs.readFileSync(UI_FILE));
     } catch {
       res.writeHead(500);
@@ -807,39 +844,74 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // Saltar a una sesión: por sessionId, por estado ({status:"needs_you"|
+  // "working"|"ready"} → la más antigua en ese estado) o la urgente
+  // ({urgent:true} → needs_you, luego ready). Cascada: enfocar su ventana;
+  // si no se puede pero se conoce su escritorio, al menos cambiar a él.
   if (route === "POST /api/sessions/jump") {
     const body = await readBody(req);
     const windows = loadWindows();
-    let id = body.sessionId || null;
-    if (!id && body.urgent) {
-      // La sesión con ventana registrada que lleva más tiempo esperándote.
-      // El hotkey no tiene UI donde mostrar errores: el feedback va por toast.
-      const sessions = buildPayload().sessions;
-      const oldest = (st) =>
-        sessions
-          .filter((s) => s.status === st && windows[s.sessionId] && windows[s.sessionId].hwnd)
-          .sort((a, b) => String(a.statusSince).localeCompare(String(b.statusSince)))[0];
-      const target = oldest("needs_you") || oldest("ready");
-      id = target ? target.sessionId : null;
-      if (!id) {
-        showToast(
-          "Atalaya: nada a donde saltar",
-          "Ninguna sesión pendiente tiene ventana registrada (se registra al enviarle un prompt)."
-        );
-        return json(res, 404, { error: "sin sesiones pendientes con ventana registrada" });
+    const fromUi = !!body.sessionId; // el panel muestra errores; hotkey/píldora → toast
+    const sessions = buildPayload().sessions;
+    let target = null;
+    if (body.sessionId) {
+      target = sessions.find((s) => s.sessionId === body.sessionId) || { sessionId: body.sessionId };
+    } else {
+      const wanted = body.status ? [String(body.status)] : ["needs_you", "ready"];
+      for (const st of wanted) {
+        const pool = sessions
+          .filter((s) => s.status === st)
+          .sort((a, b) => String(a.statusSince).localeCompare(String(b.statusSince)));
+        // Preferir una con ventana registrada; si no, la más antigua igual
+        target = pool.find((s) => windows[s.sessionId] && windows[s.sessionId].hwnd) || pool[0] || null;
+        if (target) break;
       }
     }
-    if (!id) return json(res, 404, { error: "no hay sesión que atender" });
-    const w = windows[id];
-    if (!w || !w.hwnd) {
-      return json(res, 409, { error: "sin ventana registrada: envía un prompt en esa sesión" });
+    if (!target) {
+      if (!fromUi) showToast("Atalaya", "No hay sesiones en ese estado.");
+      return json(res, 404, { error: "no hay sesión que atender" });
     }
-    jumpToWindow(w.hwnd, (ok) => {
-      if (ok) return json(res, 200, { ok: true });
-      if (body.urgent) showToast("Atalaya: salto fallido", "No se pudo enfocar la ventana (¿se cerró?).");
-      json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
-    });
-    return;
+    const w = windows[target.sessionId];
+    const deskNum =
+      target.desktopNum !== null && target.desktopNum !== undefined ? target.desktopNum : null;
+    const switchOnly = () => {
+      execVdesk([`/Switch:${deskNum}`], { timeout: 5000 }, (err, out) => {
+        if (/Switching to virtual desktop/.test(String(out || ""))) {
+          json(res, 200, { ok: true, desktopOnly: true });
+        } else {
+          if (!fromUi) showToast("Atalaya: salto fallido", "No se pudo llegar a esa sesión.");
+          json(res, 502, { error: "no se pudo saltar" });
+        }
+      });
+    };
+    if (w && w.hwnd) {
+      jumpToWindow(w.hwnd, (ok) => {
+        if (ok) return json(res, 200, { ok: true });
+        if (deskNum !== null && fs.existsSync(VDESK_EXE)) return switchOnly();
+        if (!fromUi) showToast("Atalaya: salto fallido", "No se pudo enfocar la ventana (¿se cerró?).");
+        json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
+      });
+      return;
+    }
+    if (deskNum !== null && fs.existsSync(VDESK_EXE)) return switchOnly();
+    if (!fromUi) {
+      showToast(
+        "Atalaya: sin ventana registrada",
+        "Envía un prompt en esa sesión para poder saltar a ella."
+      );
+    }
+    return json(res, 409, { error: "sin ventana registrada: envía un prompt en esa sesión" });
+  }
+
+  if (route === "POST /api/sessions/pin") {
+    const body = await readBody(req);
+    const id = String(body.sessionId || "");
+    if (!id) return json(res, 400, { error: "sessionId requerido" });
+    let pins = loadPins().filter((p) => p !== id);
+    if (body.pinned) pins.push(id);
+    savePins(pins);
+    scheduleBroadcast();
+    return json(res, 200, { ok: true });
   }
 
   if (route === "POST /api/sessions/label") {

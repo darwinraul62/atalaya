@@ -57,9 +57,13 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
 ```
 
 - **HUD (píldora)**: un **botón por escritorio** (número; el actual muestra
-  además su nombre; ámbar si pide atención) — un clic y estás ahí — más los
-  contadores 🔔/⚙/✓. Doble clic = abrir panel · arrastrar = mover · clic
-  derecho = menú. La posición se puede fijar a una esquina desde Ajustes.
+  además su nombre; ámbar si pide atención) — un clic y estás ahí. Después,
+  las **sesiones importantes** (★, marcadas desde el panel) con salto de un
+  clic. Los contadores 🔔/⚙/✓ también son botones: clic = ir a la sesión que
+  **más tiempo lleva** en ese estado (enfoca su ventana; si no puede, cambia
+  a su escritorio). El 📡 abre Atalaya en **máximo foco**: maximizada y
+  enfocada en el monitor donde la dejaste. Doble clic = abrir panel ·
+  arrastrar = mover · clic derecho = menú. La esquina se fija desde Ajustes.
 - **Deck** (al pasar el mouse sobre el HUD): mini-panel con una fila por
   escritorio — nombre, agentes por estado, el trabajo más relevante y nº de
   ventanas. El que pide atención se resalta en ámbar; el actual se marca ◉.
@@ -67,9 +71,11 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
     (cambia el nombre real del escritorio de Windows).
   - **◀ ▶** = escritorio anterior/siguiente (con vuelta) · **+** = crear
     escritorio nuevo e ir a él.
+  - **[esc] / [★]**: alterna entre la vista por escritorios y la de
+    **importantes** (sesiones con estrella; clic = ir, clic derecho = quitar).
   - **📌 fijar**: el deck queda siempre visible — translúcido en reposo, opaco
     al pasar el mouse — para recordar de un vistazo qué hay en cada escritorio
-    sin ningún clic. La preferencia persiste.
+    sin ningún clic. La preferencia (y la vista elegida) persiste.
 - **Panel**:
   - Secciones por **escritorio virtual**; la cabecera `🖥 <nombre>` es un botón
     que cambia a ese escritorio; tu escritorio actual se marca con `◉ aquí`.
@@ -80,6 +86,9 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
   - **✏** junto al nombre de la tarjeta: etiqueta personalizada del clone
     ("qué estamos haciendo aquí"). Persiste por carpeta entre sesiones; vacío
     restaura el nombre de la carpeta, que es el valor por defecto.
+  - **☆/★** en la tarjeta: marcar la sesión como **importante** — aparece como
+    botón en la píldora y en la vista ★ del deck para volver a ella con un
+    clic (puntos que quieres verificar seguido).
   - Chip **🖥 Ventanas**: vista alternativa que muestra además las demás
     ventanas de cada escritorio (Teams, SSMS, navegador…) como filas
     compactas **con el icono real del programa**; clic en una fila la enfoca.

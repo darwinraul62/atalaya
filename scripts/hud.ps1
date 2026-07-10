@@ -86,6 +86,8 @@ $GlyphPin   = [char]::ConvertFromUtf32(0x1F4CC)   # chincheta: fijar deck
 $GlyphHere  = [char]::ConvertFromUtf32(0x25C9)    # circulo relleno: estas aqui
 $GlyphPrev  = [char]::ConvertFromUtf32(0x25C0)    # triangulo izq: escritorio anterior
 $GlyphNext  = [char]::ConvertFromUtf32(0x25B6)    # triangulo der: escritorio siguiente
+$GlyphStar  = [char]::ConvertFromUtf32(0x2605)    # estrella: sesion pineada
+$GlyphDish  = [char]::ConvertFromUtf32(0x1F4E1)   # antena: abrir Atalaya (maximo foco)
 
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -99,9 +101,12 @@ $xaml = @"
     <StackPanel Orientation="Horizontal">
       <StackPanel x:Name="DeskBtns" Orientation="Horizontal" VerticalAlignment="Center"
                   Margin="0,0,9,0"/>
+      <StackPanel x:Name="PinBtns" Orientation="Horizontal" VerticalAlignment="Center"
+                  Margin="0,0,9,0"/>
       <TextBlock x:Name="TxtAttn"  FontSize="13" FontWeight="SemiBold" Foreground="#E0A33F" FontFamily="Segoe UI Emoji, Segoe UI"/>
       <TextBlock x:Name="TxtWork"  FontSize="13" FontWeight="SemiBold" Foreground="#5B9CD9" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
       <TextBlock x:Name="TxtReady" FontSize="13" FontWeight="SemiBold" Foreground="#3FB3A8" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
+      <TextBlock x:Name="BtnPanel" FontSize="13" FontWeight="SemiBold" Foreground="#8FA3B8" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
     </StackPanel>
   </Border>
 </Window>
@@ -110,13 +115,42 @@ $xaml = @"
 $window   = [Windows.Markup.XamlReader]::Parse($xaml)
 $pill     = $window.FindName("Pill")
 $deskBtns = $window.FindName("DeskBtns")
+$pinBtns  = $window.FindName("PinBtns")
 $txtAttn  = $window.FindName("TxtAttn")
 $txtWork  = $window.FindName("TxtWork")
 $txtReady = $window.FindName("TxtReady")
+$btnPanel = $window.FindName("BtnPanel")
 
 # Tooltip agil: aparece rapido y dura lo suficiente para leer el vistazo
 [System.Windows.Controls.ToolTipService]::SetInitialShowDelay($window, 250)
 [System.Windows.Controls.ToolTipService]::SetShowDuration($window, 60000)
+
+# Boton de la antena: abrir Atalaya en "maximo foco" (maximizada y enfocada
+# en el monitor donde el usuario la dejo)
+$btnPanel.Text = $GlyphDish
+$btnPanel.Cursor = "Hand"
+$btnPanel.ToolTip = "Abrir Atalaya en maximo foco (maximizada, donde la dejaste)"
+$btnPanel.Add_MouseLeftButtonDown({
+    param($src, $e)
+    $e.Handled = $true
+    Open-PanelMax
+})
+
+# Contadores clicables: ir a la sesion que MAS tiempo lleva en ese estado
+# (enfoca su ventana; si no se puede, cambia a su escritorio)
+foreach ($pairDef in @(
+    @{ El = $txtAttn;  St = "needs_you"; Tip = "te necesita" },
+    @{ El = $txtWork;  St = "working";   Tip = "trabajando" },
+    @{ El = $txtReady; St = "ready";     Tip = "lista para revisar" })) {
+    $pairDef.El.Cursor = "Hand"
+    $pairDef.El.Tag = [string]$pairDef.St
+    $pairDef.El.ToolTip = "Ir a la sesion que mas tiempo lleva '$($pairDef.Tip)'"
+    $pairDef.El.Add_MouseLeftButtonDown({
+        param($src, $e)
+        $e.Handled = $true
+        Invoke-HubPost "/api/sessions/jump" ("{`"status`":`"" + [string]$src.Tag + "`"}")
+    })
+}
 
 $BgCalm = $pill.Background
 $BrCalm = $pill.BorderBrush
@@ -152,14 +186,17 @@ if ($PillCorner) {
 }
 
 $script:DeckPinned = $false
+$script:DeckView = "desks"   # "desks" (por escritorio) o "pins" (importantes)
 try {
     $prefs = Get-Content $PosFile -Raw | ConvertFrom-Json
     if ($prefs.deckPinned) { $script:DeckPinned = $true }
+    if ($prefs.deckView -eq "pins") { $script:DeckView = "pins" }
 } catch { }
 
 function Save-Position {
     try {
-        @{ left = $window.Left; top = $window.Top; deckPinned = $script:DeckPinned } |
+        @{ left = $window.Left; top = $window.Top
+           deckPinned = $script:DeckPinned; deckView = $script:DeckView } |
             ConvertTo-Json | Set-Content -Path $PosFile
     } catch { }
 }
@@ -172,8 +209,10 @@ function Invoke-WinCtl([string]$ctlArgs) {
         -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$WinCtl`" $ctlArgs"
 }
 
-function Open-Panel   { Invoke-WinCtl "-Action show-panel -HubUrl $HubUrl" }
-function Toggle-Panel { Invoke-WinCtl "-Action show-panel -Toggle -HubUrl $HubUrl" }
+function Open-Panel    { Invoke-WinCtl "-Action show-panel -HubUrl $HubUrl" }
+function Toggle-Panel  { Invoke-WinCtl "-Action show-panel -Toggle -HubUrl $HubUrl" }
+# Maximo foco: panel maximizado (en el monitor donde lo dejaste) y enfocado
+function Open-PanelMax { Invoke-WinCtl "-Action show-panel -Max -HubUrl $HubUrl" }
 
 # IMPORTANTE: fire-and-forget. Un POST sincrono desde un handler bloquea el
 # hilo de UI; si la accion cambia de escritorio, Windows necesita que las
@@ -304,6 +343,34 @@ function Update-Hud {
         }
     }
 
+    # Sesiones pineadas (estrella): acceso de un clic a puntos importantes
+    $pinBtns.Children.Clear()
+    if ($s.pinned) {
+        foreach ($p in $s.pinned) {
+            $urgent = $p.status -eq "needs_you"
+            $b = New-Object Windows.Controls.Border
+            $b.CornerRadius = 7; $b.Margin = "0,0,4,0"; $b.Cursor = "Hand"
+            $b.Padding = "6,1"; $b.BorderThickness = 1
+            $b.Background  = if ($urgent) { $BgUrgent } else { $BgRowCur }
+            $b.BorderBrush = if ($urgent) { $ColAttn } else { $ColInk3 }
+            $short = [string]$p.label
+            if ($short.Length -gt 10) { $short = $short.Substring(0, 9) + "~" }
+            $tb = New-Object Windows.Controls.TextBlock
+            $tb.Text = "$GlyphStar $short"; $tb.FontSize = 11.5
+            $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Emoji, Segoe UI")
+            $tb.Foreground = if ($urgent) { $ColAttn } else { $ColInk2 }
+            $b.Child = $tb
+            $b.ToolTip = "$($p.label): ir a esta sesion (pineada desde el panel)"
+            $b.Tag = [string]$p.sessionId
+            $b.Add_MouseLeftButtonDown({
+                param($src, $e)
+                $e.Handled = $true
+                Invoke-HubPost "/api/sessions/jump" ("{`"sessionId`":`"" + [string]$src.Tag + "`"}")
+            })
+            [void]$pinBtns.Children.Add($b)
+        }
+    }
+
     if ($s.needs_you -gt 0) {
         $pill.Background = $BgAttn; $pill.BorderBrush = $BrAttn
         $window.Opacity = 1.0
@@ -356,7 +423,17 @@ function New-DeckText([string]$text, $brush, [double]$size, [double]$width, [boo
     return $tb
 }
 
+# Mientras se edita, Update-Deck NO reconstruye (si no, el tick de 3 s
+# destruye la caja de texto a mitad de escritura).
+$script:DeckEditing = $false
+
+function Stop-DeckEdit {
+    $script:DeckEditing = $false
+    Update-Hud
+}
+
 function Start-DeckRename($d, $row) {
+    $script:DeckEditing = $true
     $tb = New-Object Windows.Controls.TextBox
     $tb.Text = [string]$d.name; $tb.FontSize = 12.5; $tb.Width = 300
     $tb.Background = $BgRowCur; $tb.Foreground = $ColInk; $tb.BorderBrush = $ColChrome
@@ -373,22 +450,48 @@ function Start-DeckRename($d, $row) {
                 $body = @{ desktop = $num; name = $name } | ConvertTo-Json -Compress
                 [void](Invoke-HubPost "/api/desktops/name" $body)
             }
-            Update-Hud
+            # pequenio margen para que el hub aplique el rename antes de refrescar
+            $t = New-Object System.Windows.Threading.DispatcherTimer
+            $t.Interval = [TimeSpan]::FromMilliseconds(700)
+            $t.Add_Tick({ $t.Stop(); Stop-DeckEdit }.GetNewClosure())
+            $t.Start()
         } elseif ($e2.Key -eq "Escape") {
-            Update-Hud
+            Stop-DeckEdit
         }
     }.GetNewClosure())
+    $tb.Add_LostFocus({ if ($script:DeckEditing) { Stop-DeckEdit } })
+}
+
+function Set-DeckView([string]$v) {
+    $script:DeckView = $v
+    Save-Position
+    Update-Deck $script:LastSummary
+    Position-Deck
 }
 
 function Update-Deck($s) {
     if (-not $deck.IsVisible) { return }
+    if ($script:DeckEditing) { return }
+    try {
     $deckStack.Children.Clear()
 
-    # Cabecera: navegacion (anterior/siguiente/nuevo), total y boton de fijado
+    # Cabecera: titulo, conmutador de vista, navegacion y fijado
     $head = New-Object Windows.Controls.DockPanel
     $head.Margin = "2,0,2,6"
-    $title = if ($s -and $s.desktopCount) { "$($s.desktopCount) escritorios" } else { "Escritorios" }
+    $onPins = $script:DeckView -eq "pins"
+    $title = if ($onPins) { "$GlyphStar importantes" }
+        elseif ($s -and $s.desktopCount) { "$($s.desktopCount) escritorios" } else { "Escritorios" }
     $ht = New-DeckText $title $ColInk 12.5 0 $true
+
+    # Conmutador de vista: escritorios <-> importantes
+    $swDesks = New-DeckText "[esc]" $(if ($onPins) { $ColInk3 } else { $ColChrome }) 11 0 (-not $onPins)
+    $swDesks.Cursor = "Hand"; $swDesks.Margin = "12,0,0,0"
+    $swDesks.ToolTip = "Vista por escritorios"
+    $swDesks.Add_MouseLeftButtonUp({ Set-DeckView "desks" })
+    $swPins = New-DeckText "[$GlyphStar]" $(if ($onPins) { $ColChrome } else { $ColInk3 }) 11 0 $onPins
+    $swPins.Cursor = "Hand"; $swPins.Margin = "7,0,0,0"
+    $swPins.ToolTip = "Vista de importantes (sesiones pineadas desde el panel)"
+    $swPins.Add_MouseLeftButtonUp({ Set-DeckView "pins" })
 
     $pinText = if ($script:DeckPinned) { "$GlyphPin fijado" } else { "$GlyphPin fijar" }
     $pinBtn = New-DeckText $pinText $(if ($script:DeckPinned) { $ColChrome } else { $ColInk3 }) 11.5 0 $false
@@ -418,10 +521,50 @@ function Update-Deck($s) {
     [void]$head.Children.Add($navNext)
     [void]$head.Children.Add($navPrev)
     [void]$head.Children.Add($ht)
+    [void]$head.Children.Add($swDesks)
+    [void]$head.Children.Add($swPins)
     [void]$deckStack.Children.Add($head)
 
     if (-not $s) {
         [void]$deckStack.Children.Add((New-DeckText "hub sin conexion (ejecuta atalaya.cmd)" $ColInk3 11.5 0 $false))
+        return
+    }
+
+    if ($onPins) {
+        # Vista de importantes: una fila por sesion pineada
+        if (-not $s.pinned -or @($s.pinned).Count -eq 0) {
+            [void]$deckStack.Children.Add((New-DeckText "Sin importantes: usa la estrella en las tarjetas del panel" $ColInk3 11.5 0 $false))
+            return
+        }
+        $glyphMap = @{ needs_you = $GlyphBell; working = $GlyphGear; ready = $GlyphCheck; idle = "-" }
+        foreach ($p in $s.pinned) {
+            $row = New-Object Windows.Controls.Border
+            $row.CornerRadius = 8; $row.Padding = "8,5"; $row.Margin = "0,1,0,1"
+            $row.Cursor = "Hand"
+            $urgent = $p.status -eq "needs_you"
+            $row.Background = if ($urgent) { $BgUrgent } else { $BgRow }
+            $line = New-Object Windows.Controls.StackPanel
+            $line.Orientation = "Horizontal"
+            [void]$line.Children.Add((New-DeckText "$GlyphStar $($p.label)" $(if ($urgent) { $ColAttn } else { $ColInk }) 12.5 150 $urgent))
+            $g = if ($glyphMap.ContainsKey([string]$p.status)) { $glyphMap[[string]$p.status] } else { "-" }
+            [void]$line.Children.Add((New-DeckText $g $(if ($urgent) { $ColAttn } else { $ColInk2 }) 12 26 $false))
+            $taskText = if ($p.task) { [string]$p.task } else { "" }
+            [void]$line.Children.Add((New-DeckText $taskText $ColInk3 11.5 150 $false))
+            $deskText = if ($p.desktopName) { [string]$p.desktopName } else { "" }
+            [void]$line.Children.Add((New-DeckText $deskText $ColInk3 11 60 $false))
+            $row.Child = $line
+            $row.ToolTip = "Clic: ir a esta sesion - Clic derecho: quitar de importantes"
+            $row.Tag = [string]$p.sessionId
+            $row.Add_MouseLeftButtonUp({
+                param($src, $e)
+                Invoke-HubPost "/api/sessions/jump" ("{`"sessionId`":`"" + [string]$src.Tag + "`"}")
+            })
+            $row.Add_MouseRightButtonUp({
+                param($src, $e)
+                Invoke-HubPost "/api/sessions/pin" ("{`"sessionId`":`"" + [string]$src.Tag + "`",`"pinned`":false}")
+            })
+            [void]$deckStack.Children.Add($row)
+        }
         return
     }
 
@@ -469,6 +612,9 @@ function Update-Deck($s) {
             $row.Cursor = "Arrow"
         }
         [void]$deckStack.Children.Add($row)
+    }
+    } catch {
+        Write-HudLog "Update-Deck error: $_ (linea $($_.InvocationInfo.ScriptLineNumber))"
     }
 }
 
@@ -538,6 +684,9 @@ $menu = New-Object System.Windows.Controls.ContextMenu
 $miPanel = New-Object System.Windows.Controls.MenuItem
 $miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = $Hotkeys.togglePanel
 $miPanel.Add_Click({ Toggle-Panel })
+$miPanelMax = New-Object System.Windows.Controls.MenuItem
+$miPanelMax.Header = "Abrir panel en maximo foco"
+$miPanelMax.Add_Click({ Open-PanelMax })
 $miJump = New-Object System.Windows.Controls.MenuItem
 $miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = $Hotkeys.jumpUrgent
 $miJump.Add_Click({ Jump-Urgent })
@@ -546,6 +695,7 @@ $miPin.Add_Click({ Pin-ToAllDesktops })
 $miExit = New-Object System.Windows.Controls.MenuItem; $miExit.Header = "Salir del HUD"
 $miExit.Add_Click({ $window.Close() })
 [void]$menu.Items.Add($miPanel)
+[void]$menu.Items.Add($miPanelMax)
 [void]$menu.Items.Add($miJump)
 [void]$menu.Items.Add($miPin)
 [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
