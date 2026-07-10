@@ -84,6 +84,13 @@ if (-not (Test-Path $wsFile)) {
     Write-Host "Creado workspaces.json inicial: edita ahi tus proyectos/escritorios."
 }
 
+# Config del usuario (hotkeys, etc.) con valores por defecto
+$cfgFile = Join-Path $StateDir "config.json"
+if (-not (Test-Path $cfgFile)) {
+    Set-Content -Path $cfgFile -Value '{ "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J" } }'
+    Write-Host "Creado $cfgFile (hotkeys configurables; 'none' desactiva)."
+}
+
 if (-not (Test-Hub)) {
     Write-Host "Arrancando hub..."
     Start-Process -FilePath "node" -ArgumentList "`"$RepoRoot\src\hub.js`"" `

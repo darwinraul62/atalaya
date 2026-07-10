@@ -25,6 +25,39 @@ $PosFile  = Join-Path $StateDir "hud.json"
 $LogFile  = Join-Path $StateDir "hub.log"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 
+# Hotkeys configurables en ~/.atalaya/config.json ("none" desactiva):
+#   { "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J" } }
+$HotkeyTogglePanel = "Ctrl+Alt+A"
+$HotkeyJumpUrgent  = "Ctrl+Alt+J"
+try {
+    $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
+    if ($cfg.hotkeys.togglePanel) { $HotkeyTogglePanel = [string]$cfg.hotkeys.togglePanel }
+    if ($cfg.hotkeys.jumpUrgent)  { $HotkeyJumpUrgent  = [string]$cfg.hotkeys.jumpUrgent }
+} catch { }
+
+function ConvertTo-Hotkey([string]$spec) {
+    # "Ctrl+Alt+A" -> @{ Mods; Vk }. Teclas: A-Z, 0-9 o F1-F24. $null si "none"/invalido.
+    if (-not $spec -or $spec.Trim().ToLower() -eq "none") { return $null }
+    $mods = 0; $vk = 0
+    foreach ($part in $spec -split "\+") {
+        switch ($part.Trim().ToLower()) {
+            "ctrl"    { $mods = $mods -bor 0x2 }
+            "control" { $mods = $mods -bor 0x2 }
+            "alt"     { $mods = $mods -bor 0x1 }
+            "shift"   { $mods = $mods -bor 0x4 }
+            "win"     { $mods = $mods -bor 0x8 }
+            default {
+                $k = $part.Trim().ToUpper()
+                if ($k -match "^[A-Z0-9]$") { $vk = [int][char]$k }
+                elseif ($k -match "^F([1-9]|1[0-9]|2[0-4])$") { $vk = 0x6F + [int]$Matches[1] }
+                else { return $null }
+            }
+        }
+    }
+    if ($mods -eq 0 -or $vk -eq 0) { return $null }
+    return @{ Mods = $mods; Vk = $vk }
+}
+
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 Set-Content -Path (Join-Path $StateDir "hud.pid") -Value $PID
 
@@ -202,10 +235,10 @@ $window.Add_MouseLeftButtonDown({
 
 $menu = New-Object System.Windows.Controls.ContextMenu
 $miPanel = New-Object System.Windows.Controls.MenuItem
-$miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = "Ctrl+Alt+A"
+$miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = $HotkeyTogglePanel
 $miPanel.Add_Click({ Toggle-Panel })
 $miJump = New-Object System.Windows.Controls.MenuItem
-$miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = "Ctrl+Alt+J"
+$miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = $HotkeyJumpUrgent
 $miJump.Add_Click({ Jump-Urgent })
 $miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
 $miPin.Add_Click({ Pin-ToAllDesktops })
@@ -236,12 +269,19 @@ function Register-Hotkeys {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
         $script:HwndSource = [System.Windows.Interop.HwndSource]::FromHwnd($helper.Handle)
         $script:HwndSource.AddHook($HotkeyHook)
-        $mod = 0x0002 -bor 0x0001  # MOD_CONTROL | MOD_ALT
-        if (-not [AtalayaHotkey]::RegisterHotKey($helper.Handle, 1, $mod, 0x41)) {
-            Write-HudLog "hotkey Ctrl+Alt+A no disponible (ya en uso por otra app)"
-        }
-        if (-not [AtalayaHotkey]::RegisterHotKey($helper.Handle, 2, $mod, 0x4A)) {
-            Write-HudLog "hotkey Ctrl+Alt+J no disponible (ya en uso por otra app)"
+        $wanted = @(
+            @{ Id = 1; Spec = $HotkeyTogglePanel; Name = "mostrar/ocultar panel" },
+            @{ Id = 2; Spec = $HotkeyJumpUrgent;  Name = "salto urgente" }
+        )
+        foreach ($hk in $wanted) {
+            $parsed = ConvertTo-Hotkey $hk.Spec
+            if ($null -eq $parsed) {
+                Write-HudLog "hotkey $($hk.Name): desactivado o invalido ('$($hk.Spec)')"
+                continue
+            }
+            if (-not [AtalayaHotkey]::RegisterHotKey($helper.Handle, $hk.Id, $parsed.Mods, $parsed.Vk)) {
+                Write-HudLog "hotkey $($hk.Spec) ($($hk.Name)) no disponible (ya en uso por otra app)"
+            }
         }
     } catch {
         Write-HudLog "hotkeys error: $_"

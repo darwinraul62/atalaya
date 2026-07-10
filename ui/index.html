@@ -57,19 +57,29 @@
 
   .desktops { display: grid; gap: 16px; margin-top: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
   .desktop { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; align-self: start; }
-  .desktop-h { display: flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--ink-2); }
+  .desktop-h { display: flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--ink-2); flex-wrap: wrap; }
   .desktop-h .key { font-family: var(--mono); font-size: 11px; font-weight: 600; border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; background: var(--panel); }
-  .desktop-h h2 { font-size: 13px; font-weight: 650; letter-spacing: .02em; }
-  .desktop-h .count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .desktop-h button.key { cursor: pointer; color: var(--chrome); }
+  .desktop-h button.key:hover { border-color: var(--chrome); }
+  .desktop-h h2 { font-size: 13px; font-weight: 650; letter-spacing: .02em; overflow-wrap: anywhere; }
+  .desktop-h .count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
+  .here-tag { font: 600 11px var(--ui); color: var(--chrome); white-space: nowrap; }
+  .desktop.here { border-color: var(--chrome); }
 
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 7px; }
   .card[data-status="needs_you"] { border-color: color-mix(in srgb, var(--attn) 55%, var(--line)); }
   .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .proj { font-weight: 650; font-size: 13.5px; }
   .clone { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  button.edit { border: none; background: none; color: var(--ink-3); cursor: pointer; font-size: 12px; line-height: 1; padding: 1px 3px; opacity: .5; }
+  .card:hover button.edit, button.edit:focus-visible { opacity: 1; }
+  button.edit:hover { color: var(--chrome); }
+  input.label-edit {
+    border: 1px solid var(--chrome); background: var(--panel); color: var(--ink);
+    border-radius: 5px; padding: 2px 7px; font: 600 13px var(--ui); width: 190px;
+  }
   .agent { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .05em; text-transform: uppercase; }
   .host { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--chrome); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
-  .desk { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
   .task { color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
   .msg { color: var(--attn); font-size: 12px; font-weight: 600; }
   .card-bottom { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
@@ -134,7 +144,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.2.1";
+const UI_VERSION = "0.3.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -170,6 +180,14 @@ function cwdTail(cwd) {
   return parts.slice(-2).join("/");
 }
 
+async function postJson(url, body) {
+  return fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+}
+
 function sessionCard(s) {
   const card = el("article", "card");
   card.dataset.status = s.status;
@@ -177,15 +195,39 @@ function sessionCard(s) {
   if (filter && s.status !== filter) card.classList.add("dim");
 
   const top = el("div", "card-top");
-  top.append(el("span", "proj", s.project || "?"));
+  const proj = el("span", "proj", s.label || s.project || "?");
+  if (s.label) proj.title = "Carpeta: " + (s.project || "?");
+  top.append(proj);
+
+  // Etiqueta editable (persiste por carpeta/clone; vacío = volver al nombre de carpeta)
+  const edit = el("button", "edit", "✏");
+  edit.title = s.label ? "Renombrar (Enter guarda, vacío restaura, Esc cancela)" : "Poner nombre a este trabajo";
+  edit.addEventListener("click", () => {
+    const input = el("input", "label-edit");
+    input.value = s.label || "";
+    input.placeholder = s.project || "";
+    input.maxLength = 60;
+    proj.replaceWith(input);
+    edit.style.display = "none";
+    input.focus();
+    input.select();
+    let done = false;
+    const save = async () => {
+      if (done) return;
+      done = true;
+      await postJson("/api/sessions/label", { cwd: s.cwd, label: input.value.trim() });
+    };
+    input.addEventListener("keydown", (e) => {
+      if (e.key === "Enter") save();
+      else if (e.key === "Escape") { done = true; render(); }
+    });
+    input.addEventListener("blur", () => { if (!done) { done = true; render(); } });
+  });
+  top.append(edit);
+
   const clone = cwdTail(s.cwd) + (s.ports ? " · :" + s.ports : "");
   top.append(el("span", "clone", clone));
   if (s.host === "wsl") top.append(el("span", "host", "WSL"));
-  if (s.desktopName || s.desktopNum !== null && s.desktopNum !== undefined) {
-    const badge = el("span", "desk", "🖥 " + (s.desktopName || "Escritorio " + (s.desktopNum + 1)));
-    badge.title = "Escritorio virtual donde vive esta sesión";
-    top.append(badge);
-  }
   top.append(el("span", "agent", s.agent || "agente"));
   card.append(top);
 
@@ -196,16 +238,12 @@ function sessionCard(s) {
   if (s.branch) bottom.append(el("span", "branch", s.branch));
   if (s.hwnd) {
     const jump = el("button", "jump", "↗ Ir");
-    jump.title = "Cambiar a su escritorio y enfocar su ventana";
-    jump.addEventListener("click", async () => {
+    jump.title = "Cambiar a su escritorio y enfocar su ventana (o doble clic en la tarjeta)";
+    const doJump = async () => {
       jump.disabled = true;
       let msg = null;
       try {
-        const r = await fetch("/api/sessions/jump", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ sessionId: s.sessionId }),
-        });
+        const r = await postJson("/api/sessions/jump", { sessionId: s.sessionId });
         if (!r.ok) msg = (await r.json()).error || "no se pudo saltar";
       } catch {
         msg = "hub sin conexión";
@@ -216,8 +254,14 @@ function sessionCard(s) {
       } else {
         jump.disabled = false;
       }
-    });
+    };
+    jump.addEventListener("click", doJump);
     bottom.append(jump);
+    card.addEventListener("dblclick", (e) => {
+      if (e.target.closest("button, input")) return;
+      doJump();
+    });
+    card.title = "Doble clic: ir a esta sesión";
   }
   const st = STATUS[s.status] || STATUS.idle;
   const pill = el("span", "pill");
@@ -256,21 +300,31 @@ function noteCard(n) {
   return card;
 }
 
+// Agrupa por escritorio virtual detectado; las sesiones aún sin ventana
+// registrada (sin prompt desde que arrancó el hub) van a un grupo aparte.
 function groupSessions() {
   const groups = new Map();
   for (const s of state.sessions) {
-    const key = s.workspace || s.parentDir || "Otros proyectos";
-    if (!groups.has(key)) groups.set(key, { name: key, desktop: s.desktop, items: [] });
-    const g = groups.get(key);
-    if (!g.desktop && s.desktop) g.desktop = s.desktop;
-    g.items.push(s);
+    const known = s.desktopNum !== null && s.desktopNum !== undefined;
+    const key = known ? "d" + s.desktopNum : "none";
+    if (!groups.has(key)) {
+      groups.set(key, {
+        num: known ? s.desktopNum : null,
+        name: known ? s.desktopName || "Escritorio " + (s.desktopNum + 1) : null,
+        items: [],
+      });
+    }
+    groups.get(key).items.push(s);
   }
-  const ordered = [];
-  for (const name of state.workspaceOrder) {
-    if (groups.has(name)) { ordered.push(groups.get(name)); groups.delete(name); }
-  }
-  ordered.push(...groups.values());
+  const ordered = [...groups.values()].sort((a, b) => {
+    if (a.num === null) return 1;
+    if (b.num === null) return -1;
+    return a.num - b.num;
+  });
   for (const g of ordered) {
+    // Contexto del grupo: los workspaces/carpetas que viven en ese escritorio
+    g.context = [...new Set(g.items.map((s) => s.workspace || s.parentDir).filter(Boolean))]
+      .slice(0, 3).join(" · ");
     g.items.sort((a, b) => {
       const d = ORDER.indexOf(a.status) - ORDER.indexOf(b.status);
       return d !== 0 ? d : String(a.statusSince).localeCompare(String(b.statusSince));
@@ -283,11 +337,26 @@ function render() {
   const board = document.getElementById("board");
   board.replaceChildren();
 
+  const here = state.currentDesktop;
   for (const g of groupSessions()) {
     const sec = el("section", "desktop");
     const h = el("div", "desktop-h");
-    if (g.desktop) h.append(el("span", "key", g.desktop));
-    h.append(el("h2", null, g.name));
+    if (g.num !== null) {
+      const key = el("button", "key", "🖥 " + g.name);
+      key.title = "Cambiar a este escritorio";
+      key.addEventListener("click", () => postJson("/api/desktops/switch", { desktop: g.num }));
+      h.append(key);
+      h.append(el("h2", null, g.context || ""));
+      if (here && here.num === g.num) {
+        sec.classList.add("here");
+        h.append(el("span", "here-tag", "◉ aquí"));
+      }
+    } else {
+      const key = el("span", "key", "🖥 ?");
+      key.title = "Sin escritorio detectado: se detecta al enviar un prompt en esa sesión";
+      h.append(key);
+      h.append(el("h2", null, g.context || "Sin escritorio detectado"));
+    }
     h.append(el("span", "count", g.items.length + (g.items.length === 1 ? " sesión" : " sesiones")));
     sec.append(h);
     for (const s of g.items) sec.append(sessionCard(s));
@@ -354,6 +423,16 @@ setInterval(() => {
     t.textContent = elapsed(t.dataset.since);
   });
 }, 30000);
+
+// Al volver al panel, refrescar para actualizar el marcador "aquí"
+// (el usuario pudo cambiar de escritorio sin que hubiera eventos de sesión)
+window.addEventListener("focus", async () => {
+  try {
+    const r = await fetch("/api/sessions");
+    state = await r.json();
+    render();
+  } catch { /* SSE sigue mandando */ }
+});
 
 // SSE con reconexión
 function connect() {

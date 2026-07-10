@@ -27,9 +27,11 @@ Claude Code / Codex ──hooks──▶ ~/.atalaya/sessions/*.json ──▶ hu
    resumen (🔔 te necesita · ⚙ trabajando · ✓ listo). Semitransparente en
    reposo; se enciende en ámbar cuando algo requiere atención. Arrastrable,
    posición persistida. Doble clic abre el panel completo.
-4. **Panel** (`ui/index.html`): tablero agrupado por workspace/escritorio con
-   tarjeta por sesión (proyecto, clone, rama, tarea, estado y tiempo), filtros
-   por estado y notas manuales para pendientes no-agente (ofimática, etc.).
+4. **Panel** (`ui/index.html`): tablero agrupado por **escritorio virtual
+   detectado** — al abrirlo ves qué hay en cada escritorio y cuál es el tuyo
+   (marcado con `◉ aquí`). Cada tarjeta muestra etiqueta/proyecto, clone,
+   rama, tarea, estado y tiempo; filtros por estado y notas manuales para
+   pendientes no-agente (ofimática, etc.).
 
 ## Estados de una sesión
 
@@ -55,15 +57,31 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
 ```
 
 - **HUD**: doble clic = abrir panel · arrastrar = mover · clic derecho = menú.
-- **Panel**: chips superiores filtran por estado; caja de "Notas" para anotar
-  en qué quedaste en tareas manuales; botón **↗ Ir** en cada tarjeta para
-  saltar a esa sesión.
+- **Panel**:
+  - Secciones por **escritorio virtual**; la cabecera `🖥 <nombre>` es un botón
+    que cambia a ese escritorio; tu escritorio actual se marca con `◉ aquí`.
+  - **↗ Ir** (o **doble clic** en la tarjeta): salta a esa sesión.
+  - **✏** junto al nombre: etiqueta personalizada del clone ("qué estamos
+    haciendo aquí"). Persiste por carpeta entre sesiones; vacío restaura el
+    nombre de la carpeta, que es el valor por defecto.
+  - Chips superiores filtran por estado; caja de "Notas" para pendientes
+    manuales.
 - **Hotkeys globales** (funcionan desde cualquier app mientras el HUD corre):
 
-  | Atajo | Acción |
+  | Atajo (por defecto) | Acción |
   |---|---|
   | `Ctrl+Alt+A` | Mostrar/ocultar el panel (modo quake: aparece en el escritorio actual) |
   | `Ctrl+Alt+J` | Saltar a la sesión más urgente (la que lleva más tiempo esperándote) |
+
+  Se configuran en `%USERPROFILE%\.atalaya\config.json` (se crea solo con los
+  valores por defecto; reiniciar el HUD para aplicar cambios):
+
+  ```json
+  { "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J" } }
+  ```
+
+  Modificadores: `Ctrl`, `Alt`, `Shift`, `Win` · teclas: `A`-`Z`, `0`-`9`,
+  `F1`-`F24` · `"none"` desactiva ese atajo.
 
 ## Saltar a una sesión
 
@@ -160,10 +178,17 @@ agrupa las sesiones por proyecto y les asocia escritorio y puertos:
 de WSL se normalizan a `c:/...`). La coincidencia más larga gana. El hub
 recarga el archivo automáticamente al guardarlo.
 
+Nota: el tablero se agrupa por el **escritorio real detectado**, no por este
+archivo; el workspace aporta el nombre agrupador que se ve en la cabecera de
+cada escritorio y los puertos que muestra la tarjeta. `desktop` es una
+etiqueta informativa heredada (opcional).
+
 ## Estado y diagnóstico
 
 - Estado central: `%USERPROFILE%\.atalaya\` (`sessions/`, `notes.json`,
-  `hub.log`, `hook-errors.log`, `hud.json` con la posición del HUD).
+  `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
+  escritorio de cada sesión, `config.json` con los hotkeys, `hub.log`,
+  `hook-errors.log`, `hud.json` con la posición del HUD).
 - El hook **nunca** escribe a stdout ni falla (exit 0 siempre) para no
   interferir con Claude Code; sus errores van a `hook-errors.log`.
 - Si el HUD marca "sin conexión": ejecuta `atalaya.cmd` (rearranca el hub).

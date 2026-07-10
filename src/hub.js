@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.1";
+const VERSION = "0.3.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -33,6 +33,7 @@ const UI_FILE = path.join(REPO_ROOT, "ui", "index.html");
 const TOAST_PS1 = path.join(REPO_ROOT, "scripts", "toast.ps1");
 const WINCTL_PS1 = path.join(REPO_ROOT, "scripts", "winctl.ps1");
 const WINDOWS_FILE = path.join(STATE_DIR, "windows.json");
+const LABELS_FILE = path.join(STATE_DIR, "labels.json");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
 const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"];
 
@@ -157,6 +158,46 @@ function captureWindowContext(sessionIds) {
   );
 }
 
+// ── Etiquetas manuales ──────────────────────────────────────────────────────
+// Nombre puesto por el usuario a una carpeta/clone (clave: cwd normalizado).
+// Persiste entre sesiones: describe el trabajo del clone, no la sesión.
+
+function loadLabels() {
+  try {
+    const map = JSON.parse(fs.readFileSync(LABELS_FILE, "utf8"));
+    return map && typeof map === "object" ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveLabels(map) {
+  try {
+    fs.writeFileSync(LABELS_FILE, JSON.stringify(map, null, 2));
+  } catch (e) {
+    log(`labels.json error: ${e.message}`);
+  }
+}
+
+// ── Escritorio actual ───────────────────────────────────────────────────────
+
+let currentDesktop = null;
+let currentDesktopAt = 0;
+
+function refreshCurrentDesktop() {
+  return new Promise((resolve) => {
+    if (process.platform !== "win32" || !fs.existsSync(VDESK_EXE)) return resolve(null);
+    if (Date.now() - currentDesktopAt < 2000) return resolve(currentDesktop);
+    execFile(VDESK_EXE, ["/GetCurrentDesktop"], { windowsHide: true, timeout: 3000 }, (err, out) => {
+      // Salida: "Current desktop: 'Dev' (desktop number 1)"
+      const m = String(out || "").match(/Current desktop: '([^']*)' \(desktop number (\d+)\)/);
+      if (m) currentDesktop = { num: Number(m[2]), name: m[1] };
+      currentDesktopAt = Date.now();
+      resolve(currentDesktop);
+    });
+  });
+}
+
 function jumpToWindow(hwnd, cb) {
   execFile(
     "powershell.exe",
@@ -180,6 +221,7 @@ function jumpToWindow(hwnd, cb) {
 function loadSessions() {
   const workspaces = loadWorkspaces();
   const windows = loadWindows();
+  const labels = loadLabels();
   const sessions = [];
   let files = [];
   try {
@@ -203,6 +245,7 @@ function loadSessions() {
       s.hwnd = w ? w.hwnd : null;
       s.desktopNum = w && w.desktop !== null && w.desktop !== undefined ? w.desktop : null;
       s.desktopName = w ? w.desktopName || null : null;
+      s.label = labels[normPath(s.cwd)] || null;
       sessions.push(s);
     } catch {
       /* ficha corrupta o a medio escribir: se ignora */
@@ -278,6 +321,7 @@ function buildPayload() {
     notes: loadNotes(),
     workspaceOrder: workspaces.map((w) => w.name),
     generatedAt: new Date().toISOString(),
+    currentDesktop,
     // El panel se auto-recarga cuando el hub cambia de versión (JS obsoleto)
     hubVersion: VERSION,
   };
@@ -333,11 +377,12 @@ function checkTransitions(payload) {
     if (s.status !== "needs_you" && s.status !== "ready") continue;
     if (now - (lastToast.get(s.sessionId) || 0) < 15e3) continue;
     lastToast.set(s.sessionId, now);
-    const where = s.desktop ? ` — ${s.desktop}` : "";
+    const where = s.desktopName ? ` — ${s.desktopName}` : s.desktop ? ` — ${s.desktop}` : "";
+    const who = s.label || s.project;
     if (s.status === "needs_you") {
-      showToast(`Te necesita: ${s.project}${where}`, s.message || s.task || "Sesión esperando tu respuesta");
+      showToast(`Te necesita: ${who}${where}`, s.message || s.task || "Sesión esperando tu respuesta");
     } else {
-      showToast(`Listo: ${s.project}${where}`, s.task || "Turno terminado, listo para revisar");
+      showToast(`Listo: ${who}${where}`, s.task || "Turno terminado, listo para revisar");
     }
   }
   if (toCapture.length) captureWindowContext(toCapture);
@@ -350,8 +395,9 @@ let broadcastTimer = null;
 
 function scheduleBroadcast() {
   if (broadcastTimer) return;
-  broadcastTimer = setTimeout(() => {
+  broadcastTimer = setTimeout(async () => {
     broadcastTimer = null;
+    await refreshCurrentDesktop();
     const payload = buildPayload();
     checkTransitions(payload);
     const frame = `data: ${JSON.stringify(payload)}\n\n`;
@@ -430,6 +476,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (route === "GET /api/sessions") {
+    await refreshCurrentDesktop();
     return json(res, 200, buildPayload());
   }
 
@@ -468,6 +515,35 @@ const server = http.createServer(async (req, res) => {
       if (ok) return json(res, 200, { ok: true });
       if (body.urgent) showToast("Atalaya: salto fallido", "No se pudo enfocar la ventana (¿se cerró?).");
       json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
+    });
+    return;
+  }
+
+  if (route === "POST /api/sessions/label") {
+    const body = await readBody(req);
+    const key = normPath(body.cwd || "");
+    if (!key) return json(res, 400, { error: "cwd requerido" });
+    const label = String(body.label || "").trim().slice(0, 60);
+    const labels = loadLabels();
+    if (label) labels[key] = label;
+    else delete labels[key];
+    saveLabels(labels);
+    scheduleBroadcast();
+    return json(res, 200, { ok: true });
+  }
+
+  if (route === "POST /api/desktops/switch") {
+    const body = await readBody(req);
+    const n = Number(body.desktop);
+    if (!Number.isInteger(n) || n < 0) return json(res, 400, { error: "desktop inválido" });
+    if (!fs.existsSync(VDESK_EXE)) {
+      return json(res, 409, { error: "falta tools\\VirtualDesktop.exe (tools\\get-virtualdesktop.ps1)" });
+    }
+    // OJO: VirtualDesktop.exe devuelve el número de escritorio como exit code
+    // (no cero != error); el éxito se decide por el texto de salida.
+    execFile(VDESK_EXE, [`/Switch:${n}`], { windowsHide: true, timeout: 5000 }, (err, out) => {
+      if (/Switching to virtual desktop/.test(String(out || ""))) json(res, 200, { ok: true });
+      else json(res, 502, { error: "no se pudo cambiar de escritorio" });
     });
     return;
   }
