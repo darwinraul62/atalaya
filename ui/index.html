@@ -29,10 +29,11 @@
     background: var(--bg); color: var(--ink); font: 14px/1.45 var(--ui);
     padding-bottom: 48px;
   }
-  .frame { max-width: 2100px; margin: 0 auto; padding: 0 24px; }
+  /* Sin tope de ancho: el tablero aprovecha toda la pantalla */
+  .frame { margin: 0 auto; padding: 0 24px; }
 
   header.bar { background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
-  .bar-inner { max-width: 2100px; margin: 0 auto; padding: 10px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .bar-inner { margin: 0 auto; padding: 10px 24px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
   .brand { display: flex; align-items: baseline; gap: 10px; }
   .brand strong { font-size: 17px; font-weight: 650; }
   .brand span { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase; }
@@ -58,7 +59,8 @@
   .desktops { display: grid; gap: 16px; margin-top: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
   /* Modo "una fila": todos los escritorios como columnas con scroll horizontal */
   .desktops.row { display: flex; flex-wrap: nowrap; align-items: flex-start; overflow-x: auto; padding-bottom: 10px; }
-  .desktops.row .desktop { flex: 0 0 335px; }
+  /* Crecen para llenar el ancho; solo hay scroll cuando de verdad no caben */
+  .desktops.row .desktop { flex: 1 0 335px; }
   .desktop { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; align-self: start; }
   .desktop-h { display: flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--ink-2); flex-wrap: wrap; }
   .desktop-h .key { font-family: var(--mono); font-size: 11px; font-weight: 600; border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; background: var(--panel); }
@@ -165,6 +167,8 @@
         title="Mostrar también las demás ventanas de cada escritorio">🖥 Ventanas</button>
       <button class="chip" id="layoutToggle"
         title="Alternar entre cuadrícula (columnas y filas según el espacio) y una sola fila con scroll">⊞ Cuadrícula</button>
+      <button class="chip" id="notesToggle" aria-pressed="true"
+        title="Mostrar u ocultar la sección de notas manuales">🗒 Notas</button>
       <button class="chip attn" data-f="needs_you" aria-pressed="false">🔔 Te necesita <span class="n">0</span></button>
       <button class="chip work" data-f="working" aria-pressed="false">⚙ Trabajando <span class="n">0</span></button>
       <button class="chip ready" data-f="ready" aria-pressed="false">✓ Listo <span class="n">0</span></button>
@@ -223,7 +227,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.8.0";
+const UI_VERSION = "0.8.1";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -550,33 +554,35 @@ function render() {
     board.append(sec);
   }
 
-  // Grupo de notas manuales
-  const sec = el("section", "desktop");
-  const h = el("div", "desktop-h");
-  h.append(el("h2", null, "Notas · pendientes manuales"));
-  h.append(el("span", "count", state.notes.length + (state.notes.length === 1 ? " nota" : " notas")));
-  sec.append(h);
-  for (const n of state.notes) sec.append(noteCard(n));
-  const form = el("div", "note-form");
-  const input = el("input");
-  input.placeholder = "Anotar en qué quedaste… (Enter)";
-  input.maxLength = 300;
-  const btn = el("button", null, "Añadir");
-  async function addNote() {
-    const text = input.value.trim();
-    if (!text) return;
-    input.value = "";
-    await fetch("/api/notes", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ text }),
-    });
+  // Grupo de notas manuales (ocultable con el chip 🗒)
+  if (showNotes) {
+    const sec = el("section", "desktop");
+    const h = el("div", "desktop-h");
+    h.append(el("h2", null, "Notas · pendientes manuales"));
+    h.append(el("span", "count", state.notes.length + (state.notes.length === 1 ? " nota" : " notas")));
+    sec.append(h);
+    for (const n of state.notes) sec.append(noteCard(n));
+    const form = el("div", "note-form");
+    const input = el("input");
+    input.placeholder = "Anotar en qué quedaste… (Enter)";
+    input.maxLength = 300;
+    const btn = el("button", null, "Añadir");
+    const addNote = async () => {
+      const text = input.value.trim();
+      if (!text) return;
+      input.value = "";
+      await fetch("/api/notes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text }),
+      });
+    };
+    input.addEventListener("keydown", (e) => e.key === "Enter" && addNote());
+    btn.addEventListener("click", addNote);
+    form.append(input, btn);
+    sec.append(form);
+    board.append(sec);
   }
-  input.addEventListener("keydown", (e) => e.key === "Enter" && addNote());
-  btn.addEventListener("click", addNote);
-  form.append(input, btn);
-  sec.append(form);
-  board.append(sec);
 
   // Chips
   const counts = { needs_you: 0, working: 0, ready: 0, idle: 0 };
@@ -595,6 +601,17 @@ document.querySelectorAll("#chips .chip[data-f]").forEach((chip) => {
     filter = filter === chip.dataset.f ? null : chip.dataset.f;
     render();
   });
+});
+
+// Notas visibles u ocultas (preferencia recordada)
+let showNotes = localStorage.getItem("atalayaNotes") !== "0";
+const notesToggle = document.getElementById("notesToggle");
+notesToggle.setAttribute("aria-pressed", String(showNotes));
+notesToggle.addEventListener("click", () => {
+  showNotes = !showNotes;
+  localStorage.setItem("atalayaNotes", showNotes ? "1" : "0");
+  notesToggle.setAttribute("aria-pressed", String(showNotes));
+  render();
 });
 
 // Layout de escritorios: cuadrícula (según espacio) o una sola fila
