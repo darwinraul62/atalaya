@@ -132,6 +132,10 @@
 <script>
 "use strict";
 
+// Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
+// esta página está obsoleta y se recarga sola (una vez por versión).
+const UI_VERSION = "0.2.1";
+
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
   working:   { glyph: "⚙", label: "Trabajando" },
@@ -358,6 +362,12 @@ function connect() {
     document.body.classList.remove("offline");
     try {
       state = JSON.parse(e.data);
+      if (state.hubVersion && state.hubVersion !== UI_VERSION &&
+          sessionStorage.atalayaReloadedFor !== state.hubVersion) {
+        sessionStorage.atalayaReloadedFor = state.hubVersion;
+        location.reload();
+        return;
+      }
       render();
     } catch { /* frame corrupto */ }
   };

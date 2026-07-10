@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.2.0";
+const VERSION = "0.2.1";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -278,6 +278,8 @@ function buildPayload() {
     notes: loadNotes(),
     workspaceOrder: workspaces.map((w) => w.name),
     generatedAt: new Date().toISOString(),
+    // El panel se auto-recarga cuando el hub cambia de versión (JS obsoleto)
+    hubVersion: VERSION,
   };
 }
 
@@ -437,25 +439,35 @@ const server = http.createServer(async (req, res) => {
 
   if (route === "POST /api/sessions/jump") {
     const body = await readBody(req);
+    const windows = loadWindows();
     let id = body.sessionId || null;
     if (!id && body.urgent) {
-      // La sesión que lleva más tiempo esperándote; si no hay, la lista más antigua
+      // La sesión con ventana registrada que lleva más tiempo esperándote.
+      // El hotkey no tiene UI donde mostrar errores: el feedback va por toast.
       const sessions = buildPayload().sessions;
       const oldest = (st) =>
         sessions
-          .filter((s) => s.status === st)
+          .filter((s) => s.status === st && windows[s.sessionId] && windows[s.sessionId].hwnd)
           .sort((a, b) => String(a.statusSince).localeCompare(String(b.statusSince)))[0];
       const target = oldest("needs_you") || oldest("ready");
       id = target ? target.sessionId : null;
+      if (!id) {
+        showToast(
+          "Atalaya: nada a donde saltar",
+          "Ninguna sesión pendiente tiene ventana registrada (se registra al enviarle un prompt)."
+        );
+        return json(res, 404, { error: "sin sesiones pendientes con ventana registrada" });
+      }
     }
     if (!id) return json(res, 404, { error: "no hay sesión que atender" });
-    const w = loadWindows()[id];
+    const w = windows[id];
     if (!w || !w.hwnd) {
       return json(res, 409, { error: "sin ventana registrada: envía un prompt en esa sesión" });
     }
     jumpToWindow(w.hwnd, (ok) => {
-      if (ok) json(res, 200, { ok: true });
-      else json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
+      if (ok) return json(res, 200, { ok: true });
+      if (body.urgent) showToast("Atalaya: salto fallido", "No se pudo enfocar la ventana (¿se cerró?).");
+      json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
     });
     return;
   }

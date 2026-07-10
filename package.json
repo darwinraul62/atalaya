@@ -1,6 +1,6 @@
 {
   "name": "atalaya",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "private": true,
   "description": "Monitor de sesiones paralelas de agentes (Claude Code / Codex) a través de escritorios virtuales de Windows y WSL",
   "type": "module",
