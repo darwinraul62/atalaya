@@ -71,6 +71,7 @@
     font-size: 12px; color: var(--ink-2); cursor: pointer; overflow: hidden;
   }
   .winrow:hover { border-color: var(--chrome); }
+  .winrow .wicon { width: 16px; height: 16px; align-self: center; flex: none; }
   .winrow .wproc { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
   .winrow .wtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .more { font-size: 11px; color: var(--ink-3); padding: 0 4px; }
@@ -155,7 +156,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.4.0";
+const UI_VERSION = "0.5.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -428,6 +429,13 @@ function render() {
     if (viewAll) {
       for (const w of g.windows.slice(0, 8)) {
         const row = el("div", "winrow");
+        const icon = document.createElement("img");
+        icon.className = "wicon";
+        icon.alt = "";
+        icon.loading = "lazy";
+        icon.src = "/api/icon?proc=" + encodeURIComponent(w.proc) + "&pid=" + w.pid;
+        icon.addEventListener("error", () => icon.remove());
+        row.append(icon);
         row.append(el("span", "wproc", w.proc));
         row.append(el("span", "wtitle", w.title));
         row.title = "Clic: enfocar esta ventana";

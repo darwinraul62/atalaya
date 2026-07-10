@@ -69,6 +69,8 @@ function Write-HudLog([string]$msg) {
 $GlyphBell  = [char]::ConvertFromUtf32(0x1F514)   # campana: te necesita
 $GlyphGear  = [char]::ConvertFromUtf32(0x2699)    # engrane: trabajando
 $GlyphCheck = [char]::ConvertFromUtf32(0x2713)    # check: listo
+$GlyphPin   = [char]::ConvertFromUtf32(0x1F4CC)   # chincheta: fijar deck
+$GlyphHere  = [char]::ConvertFromUtf32(0x25C9)    # circulo relleno: estas aqui
 
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -123,10 +125,16 @@ try {
     }
 } catch { }
 
+$script:DeckPinned = $false
+try {
+    $prefs = Get-Content $PosFile -Raw | ConvertFrom-Json
+    if ($prefs.deckPinned) { $script:DeckPinned = $true }
+} catch { }
+
 function Save-Position {
     try {
-        @{ left = $window.Left; top = $window.Top } | ConvertTo-Json |
-            Set-Content -Path $PosFile
+        @{ left = $window.Left; top = $window.Top; deckPinned = $script:DeckPinned } |
+            ConvertTo-Json | Set-Content -Path $PosFile
     } catch { }
 }
 
@@ -141,21 +149,27 @@ function Invoke-WinCtl([string]$ctlArgs) {
 function Open-Panel   { Invoke-WinCtl "-Action show-panel -HubUrl $HubUrl" }
 function Toggle-Panel { Invoke-WinCtl "-Action show-panel -Toggle -HubUrl $HubUrl" }
 
-function Jump-Urgent {
-    # Pide al hub saltar a la sesion que lleva mas tiempo esperando
+function Invoke-HubPost([string]$path, [string]$jsonBody) {
     try {
-        $req = [System.Net.WebRequest]::Create("$HubUrl/api/sessions/jump")
+        $req = [System.Net.WebRequest]::Create("$HubUrl$path")
         $req.Method = "POST"; $req.ContentType = "application/json"; $req.Timeout = 5000
-        $bytes = [System.Text.Encoding]::UTF8.GetBytes('{"urgent":true}')
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes($jsonBody)
         $req.ContentLength = $bytes.Length
         $st = $req.GetRequestStream(); $st.Write($bytes, 0, $bytes.Length); $st.Close()
         $req.GetResponse().Close()
+        return $true
     } catch {
-        Write-HudLog "salto urgente sin efecto: $_"
+        Write-HudLog "POST $path fallo: $_"
+        return $false
     }
 }
 
-function Pin-ToAllDesktops {
+function Jump-Urgent {
+    # Pide al hub saltar a la sesion que lleva mas tiempo esperando
+    [void](Invoke-HubPost "/api/sessions/jump" '{"urgent":true}')
+}
+
+function Pin-WindowToAllDesktops([System.Windows.Window]$win, [string]$name) {
     $exe = Get-ChildItem -Path (Join-Path $RepoRoot "tools") -Filter "VirtualDesktop*.exe" |
         Select-Object -First 1
     if (-not $exe) {
@@ -163,25 +177,23 @@ function Pin-ToAllDesktops {
         return
     }
     try {
-        $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
+        $helper = New-Object System.Windows.Interop.WindowInteropHelper($win)
         $hwnd = $helper.Handle.ToInt64()
+        if ($hwnd -eq 0) { return }
         # /PinWindowHandle acepta un handle numerico o texto contenido en el
         # titulo. (/PinWindow es OTRA cosa: ancla un proceso por nombre o PID.)
         $p = Start-Process -FilePath $exe.FullName -ArgumentList "/PinWindowHandle:$hwnd" `
             -WindowStyle Hidden -PassThru -Wait
-        if ($p.ExitCode -ne 0) {
-            # Fallback: anclar por texto del titulo
-            $p = Start-Process -FilePath $exe.FullName -ArgumentList '"/PinWindowHandle:Atalaya HUD"' `
-                -WindowStyle Hidden -PassThru -Wait
-        }
         $chk = Start-Process -FilePath $exe.FullName -ArgumentList "/IsWindowHandlePinned:$hwnd" `
             -WindowStyle Hidden -PassThru -Wait
-        if ($chk.ExitCode -eq 0) { Write-HudLog "pin OK (hwnd=$hwnd)" }
-        else { Write-HudLog "pin fallo (hwnd=$hwnd, exit=$($p.ExitCode))" }
+        if ($chk.ExitCode -eq 0) { Write-HudLog "pin OK ($name hwnd=$hwnd)" }
+        else { Write-HudLog "pin fallo ($name hwnd=$hwnd, exit=$($p.ExitCode))" }
     } catch {
-        Write-HudLog "pin error: $_"
+        Write-HudLog "pin error ($name): $_"
     }
 }
+
+function Pin-ToAllDesktops { Pin-WindowToAllDesktops $window "HUD" }
 
 # ---- Datos ------------------------------------------------------------------
 function Get-Summary {
@@ -206,6 +218,8 @@ function Update-Hud {
         $pill.Background = $BgCalm; $pill.BorderBrush = $BrCalm
         $window.Opacity = 0.5
         $window.ToolTip = "Atalaya: hub sin conexion (ejecuta atalaya.cmd)"
+        $script:LastSummary = $null
+        Update-Deck $null
         return
     }
     $txtAttn.Text  = "$GlyphBell $($s.needs_you)"
@@ -237,23 +251,201 @@ function Update-Hud {
         $window.Opacity = 0.6
     }
 
-    # Tooltip: vistazo por escritorio sin abrir el panel
-    $lines = New-Object System.Collections.ArrayList
-    $head = "Atalaya"
-    if ($s.desktopCount) { $head = "Atalaya - $($s.desktopCount) escritorios" }
-    [void]$lines.Add($head)
-    if ($s.glance) { foreach ($g in $s.glance) { [void]$lines.Add([string]$g) } }
-    if ($s.urgent) { [void]$lines.Add(""); [void]$lines.Add("Atiende: $($s.urgent)") }
-    $window.ToolTip = ($lines -join [Environment]::NewLine)
+    $window.ToolTip = if ($s.urgent) { "Atiende: $($s.urgent)" } else { $null }
+    $script:LastSummary = $s
+    Update-Deck $s
 }
 
+# ---- Deck: mini-panel de escritorios sobre la pastilla -----------------------
+$deckXaml = @"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Atalaya Deck" WindowStyle="None" AllowsTransparency="True"
+        Background="Transparent" Topmost="True" ShowInTaskbar="False"
+        SizeToContent="WidthAndHeight" ResizeMode="NoResize"
+        WindowStartupLocation="Manual" ShowActivated="False">
+  <Border CornerRadius="12" Background="#F2151B23" BorderBrush="#3A4656"
+          BorderThickness="1" Padding="12,9">
+    <StackPanel x:Name="DeckStack"/>
+  </Border>
+</Window>
+"@
+$deck      = [Windows.Markup.XamlReader]::Parse($deckXaml)
+$deckStack = $deck.FindName("DeckStack")
+
+$ColInk    = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xDB, 0xE3, 0xEA))
+$ColInk2   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x93, 0xA2, 0xB0))
+$ColInk3   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x64, 0x73, 0x7F))
+$ColAttn   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xE0, 0xA3, 0x3F))
+$ColChrome = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x6F, 0xA3, 0xCC))
+$BgUrgent  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0xAA, 0x33, 0x27, 0x0F))
+$BgRow     = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x00, 0x00, 0x00, 0x00))
+$BgRowCur  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x55, 0x1B, 0x2C, 0x3E))
+
+function New-DeckText([string]$text, $brush, [double]$size, [double]$width, [bool]$bold) {
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = $text; $tb.FontSize = $size; $tb.Foreground = $brush
+    $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Emoji, Segoe UI")
+    $tb.VerticalAlignment = "Center"
+    if ($width -gt 0) { $tb.Width = $width; $tb.TextTrimming = "CharacterEllipsis" }
+    if ($bold) { $tb.FontWeight = "SemiBold" }
+    return $tb
+}
+
+function Start-DeckRename($d, $row) {
+    $tb = New-Object Windows.Controls.TextBox
+    $tb.Text = [string]$d.name; $tb.FontSize = 12.5; $tb.Width = 300
+    $tb.Background = $BgRowCur; $tb.Foreground = $ColInk; $tb.BorderBrush = $ColChrome
+    $tb.Padding = "4,2"
+    $num = [int]$d.num
+    $row.Child = $tb
+    $deck.Activate()
+    [void]$tb.Focus(); $tb.SelectAll()
+    $tb.Add_KeyDown({
+        param($src, $e2)
+        if ($e2.Key -eq "Return") {
+            $name = $src.Text.Trim()
+            if ($name) {
+                $body = @{ desktop = $num; name = $name } | ConvertTo-Json -Compress
+                [void](Invoke-HubPost "/api/desktops/name" $body)
+            }
+            Update-Hud
+        } elseif ($e2.Key -eq "Escape") {
+            Update-Hud
+        }
+    }.GetNewClosure())
+}
+
+function Update-Deck($s) {
+    if (-not $deck.IsVisible) { return }
+    $deckStack.Children.Clear()
+
+    # Cabecera: total de escritorios + boton de fijado
+    $head = New-Object Windows.Controls.DockPanel
+    $head.Margin = "2,0,2,6"
+    $title = if ($s -and $s.desktopCount) { "$($s.desktopCount) escritorios" } else { "Escritorios" }
+    $ht = New-DeckText $title $ColInk 12.5 0 $true
+    $pinText = if ($script:DeckPinned) { "$GlyphPin fijado" } else { "$GlyphPin fijar" }
+    $pinBtn = New-DeckText $pinText $(if ($script:DeckPinned) { $ColChrome } else { $ColInk3 }) 11.5 0 $false
+    $pinBtn.Cursor = "Hand"; $pinBtn.Margin = "18,0,0,0"
+    $pinBtn.ToolTip = "Fijado: el deck queda siempre visible (translucido en reposo)"
+    $pinBtn.Add_MouseLeftButtonUp({ Toggle-DeckPin })
+    [Windows.Controls.DockPanel]::SetDock($pinBtn, "Right")
+    [void]$head.Children.Add($pinBtn)
+    [void]$head.Children.Add($ht)
+    [void]$deckStack.Children.Add($head)
+
+    if (-not $s) {
+        [void]$deckStack.Children.Add((New-DeckText "hub sin conexion (ejecuta atalaya.cmd)" $ColInk3 11.5 0 $false))
+        return
+    }
+
+    foreach ($d in $s.deck) {
+        $row = New-Object Windows.Controls.Border
+        $row.CornerRadius = 8; $row.Padding = "8,5"; $row.Margin = "0,1,0,1"
+        $row.Cursor = "Hand"
+        $isCur = [bool]$d.current
+        $urgent = [int]$d.needs_you -gt 0
+        $row.Background = if ($urgent) { $BgUrgent } elseif ($isCur) { $BgRowCur } else { $BgRow }
+
+        $line = New-Object Windows.Controls.StackPanel
+        $line.Orientation = "Horizontal"
+
+        $mark = if ($isCur) { "$GlyphHere " } else { "  " }
+        [void]$line.Children.Add((New-DeckText "$mark$($d.name)" $(if ($isCur) { $ColInk } else { $ColInk2 }) 12.5 128 $isCur))
+
+        $glyphs = ""
+        if ([int]$d.needs_you -gt 0) { $glyphs += "$GlyphBell$($d.needs_you) " }
+        if ([int]$d.working -gt 0)   { $glyphs += "$GlyphGear$($d.working) " }
+        if ([int]$d.ready -gt 0)     { $glyphs += "$GlyphCheck$($d.ready)" }
+        [void]$line.Children.Add((New-DeckText $glyphs.Trim() $(if ($urgent) { $ColAttn } else { $ColInk2 }) 12 64 $urgent))
+
+        $topText = if ($d.top) { [string]$d.top } else { "" }
+        [void]$line.Children.Add((New-DeckText $topText $ColInk3 11.5 150 $false))
+
+        $winText = if ($null -ne $d.windows) { "$($d.windows)v" } else { "" }
+        $wt = New-DeckText $winText $ColInk3 11 30 $false
+        $wt.TextAlignment = "Right"
+        [void]$line.Children.Add($wt)
+
+        $row.Child = $line
+        if ($null -ne $d.num) {
+            $num = [int]$d.num
+            $dd = $d
+            $row.ToolTip = "Clic: ir a este escritorio - Clic derecho: renombrarlo"
+            $row.Add_MouseLeftButtonUp({
+                [void](Invoke-HubPost "/api/desktops/switch" "{`"desktop`":$num}")
+            }.GetNewClosure())
+            $row.Add_MouseRightButtonUp({
+                Start-DeckRename $dd $row
+            }.GetNewClosure())
+        } else {
+            $row.ToolTip = "Sesiones aun sin escritorio detectado (enviales un prompt)"
+            $row.Cursor = "Arrow"
+        }
+        [void]$deckStack.Children.Add($row)
+    }
+}
+
+function Position-Deck {
+    try {
+        $deck.UpdateLayout()
+        $left = $window.Left + $window.ActualWidth - $deck.ActualWidth
+        $top  = $window.Top - $deck.ActualHeight - 10
+        $wa = [System.Windows.SystemParameters]::WorkArea
+        if ($left -lt $wa.Left) { $left = $wa.Left + 8 }
+        if ($top -lt $wa.Top)   { $top = $window.Top + $window.ActualHeight + 10 }
+        $deck.Left = $left; $deck.Top = $top
+    } catch { }
+}
+
+$script:DeckHideTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:DeckHideTimer.Interval = [TimeSpan]::FromMilliseconds(450)
+$script:DeckHideTimer.Add_Tick({
+    $script:DeckHideTimer.Stop()
+    if (-not $script:DeckPinned -and -not $deck.IsMouseOver -and -not $window.IsMouseOver) {
+        $deck.Hide()
+    }
+})
+
+function Show-Deck {
+    $script:DeckHideTimer.Stop()
+    $first = -not $deck.IsVisible
+    if ($first) { $deck.Show() }
+    $deck.Opacity = 1.0
+    Update-Deck $script:LastSummary
+    Position-Deck
+    if (-not $script:DeckDesktopPinned) {
+        $script:DeckDesktopPinned = $true
+        Pin-WindowToAllDesktops $deck "deck"
+    }
+}
+
+function Toggle-DeckPin {
+    $script:DeckPinned = -not $script:DeckPinned
+    Save-Position
+    if ($script:DeckPinned) {
+        Show-Deck
+        if (-not $deck.IsMouseOver) { $deck.Opacity = 0.5 }
+    }
+    Update-Deck $script:LastSummary
+}
+
+$deck.Add_MouseEnter({ $script:DeckHideTimer.Stop(); $deck.Opacity = 1.0 })
+$deck.Add_MouseLeave({
+    if ($script:DeckPinned) { $deck.Opacity = 0.5 } else { $script:DeckHideTimer.Start() }
+})
+
 # ---- Eventos ----------------------------------------------------------------
+$window.Add_MouseEnter({ Show-Deck })
+$window.Add_MouseLeave({ if (-not $script:DeckPinned) { $script:DeckHideTimer.Start() } })
+
 $window.Add_MouseLeftButtonDown({
     param($sender, $e)
     if ($e.ClickCount -eq 2) {
         Open-Panel
     } else {
-        try { $window.DragMove(); Save-Position } catch { }
+        try { $window.DragMove(); Save-Position; Position-Deck } catch { }
     }
 })
 
@@ -321,10 +513,16 @@ $window.Add_ContentRendered({
     $timer.Start()
     Pin-ToAllDesktops
     Register-Hotkeys
+    if ($script:DeckPinned) {
+        Show-Deck
+        if (-not $deck.IsMouseOver) { $deck.Opacity = 0.5 }
+    }
 })
 
 $window.Add_Closed({
     $timer.Stop()
+    $script:DeckHideTimer.Stop()
+    try { $deck.Close() } catch { }
     Save-Position
     try {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)

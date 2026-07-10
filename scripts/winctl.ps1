@@ -8,10 +8,13 @@
 #   -Action windows                 imprime JSON [{hwnd,pid,proc,title}] de todas
 #                                   las ventanas visibles normales (sin tool
 #                                   windows ni UWP ocultas)
+#   -Action icon -ProcId <n>        imprime el icono del ejecutable del proceso
+#                                   como PNG en base64 (vacio si no se puede)
 # Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin BOM.
 param(
     [Parameter(Mandatory = $true)][string]$Action,
     [long]$Hwnd = 0,
+    [int]$ProcId = 0,
     [switch]$Toggle,
     [string]$HubUrl = "http://127.0.0.1:4777"
 )
@@ -178,6 +181,22 @@ switch ($Action) {
             })
         }
         ConvertTo-Json -InputObject @($items) -Compress
+    }
+
+    "icon" {
+        if ($ProcId -eq 0) { Write-Output ""; exit 1 }
+        try {
+            Add-Type -AssemblyName System.Drawing
+            $p = Get-Process -Id $ProcId -ErrorAction Stop
+            if (-not $p.Path) { Write-Output ""; break }
+            $ico = [System.Drawing.Icon]::ExtractAssociatedIcon($p.Path)
+            $bmp = $ico.ToBitmap()
+            $ms = New-Object System.IO.MemoryStream
+            $bmp.Save($ms, [System.Drawing.Imaging.ImageFormat]::Png)
+            Write-Output ([Convert]::ToBase64String($ms.ToArray()))
+        } catch {
+            Write-Output ""
+        }
     }
 
     default {

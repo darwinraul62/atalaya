@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.4.0";
+const VERSION = "0.5.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -34,6 +34,7 @@ const TOAST_PS1 = path.join(REPO_ROOT, "scripts", "toast.ps1");
 const WINCTL_PS1 = path.join(REPO_ROOT, "scripts", "winctl.ps1");
 const WINDOWS_FILE = path.join(STATE_DIR, "windows.json");
 const LABELS_FILE = path.join(STATE_DIR, "labels.json");
+const ICONS_DIR = path.join(STATE_DIR, "icons");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
 const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"];
 
@@ -440,8 +441,9 @@ function buildSummary(payload) {
   };
 }
 
-// Resumen ampliado para el HUD: escritorio actual, total de escritorios y un
-// "vistazo" por escritorio (qué agentes hay y en qué estado) para el tooltip.
+// Resumen ampliado para el HUD: escritorio actual, total de escritorios y el
+// "deck" — una entrada estructurada por escritorio para el mini-panel de la
+// píldora (agentes por estado, ventana más relevante, nº de ventanas).
 async function buildGlanceSummary() {
   await refreshCurrentDesktop();
   const desks = await listDesktops();
@@ -450,28 +452,46 @@ async function buildGlanceSummary() {
   summary.currentDesktop = currentDesktop;
   summary.desktopCount = desks ? desks.length : null;
 
-  const GLYPH = { needs_you: "🔔", working: "⚙", ready: "✓", idle: "·" };
   const byDesk = new Map();
   for (const s of payload.sessions) {
     const key = s.desktopNum !== null && s.desktopNum !== undefined ? s.desktopNum : -1;
     if (!byDesk.has(key)) byDesk.set(key, []);
     byDesk.get(key).push(s);
   }
-  const brief = (items) =>
-    items.slice(0, 4).map((s) => `${GLYPH[s.status] || "·"} ${s.label || s.project}`).join("   ");
-  const lines = [];
+  // Conteo de ventanas: del caché si es razonablemente fresco; si no, se
+  // dispara un refresco en segundo plano (la respuesta no espera, el HUD
+  // consulta cada pocos segundos y lo verá en la siguiente pasada).
+  const winsFresh = winListCache && Date.now() - winListAt < 60e3;
+  if (!winsFresh) listDesktopWindows();
+  const winCount = (num) =>
+    winsFresh ? winListCache.filter((w) => w.desktop === num).length : null;
+
+  const pickTop = (items) => {
+    const by = (st) =>
+      items.filter((s) => s.status === st)
+        .sort((a, b) => String(a.statusSince).localeCompare(String(b.statusSince)))[0];
+    const top = by("needs_you") || by("working") || by("ready") || items[0];
+    return top ? top.label || top.project : null;
+  };
+  const entry = (num, name, items) => {
+    const counts = { needs_you: 0, working: 0, ready: 0, idle: 0 };
+    for (const s of items) if (counts[s.status] !== undefined) counts[s.status]++;
+    return {
+      num,
+      name,
+      current: !!(currentDesktop && currentDesktop.num === num),
+      ...counts,
+      windows: num !== null && num >= 0 ? winCount(num) : null,
+      top: pickTop(items),
+    };
+  };
   const deskList =
     desks ||
     [...byDesk.keys()].filter((n) => n >= 0).sort((a, b) => a - b)
       .map((n) => ({ num: n, name: `Escritorio ${n + 1}` }));
-  for (const d of deskList) {
-    const items = byDesk.get(d.num) || [];
-    const mark = currentDesktop && currentDesktop.num === d.num ? " ◉ aquí" : "";
-    lines.push(`🖥 ${d.name}${mark}${items.length ? " — " + brief(items) : " — sin agentes"}`);
-  }
+  summary.deck = deskList.map((d) => entry(d.num, d.name, byDesk.get(d.num) || []));
   const loose = byDesk.get(-1) || [];
-  if (loose.length) lines.push(`🖥 ? — ${brief(loose)}`);
-  summary.glance = lines;
+  if (loose.length) summary.deck.push(entry(null, "sin escritorio", loose));
   return summary;
 }
 
@@ -597,6 +617,40 @@ const server = http.createServer(async (req, res) => {
       res.writeHead(500);
       res.end("No se encontró ui/index.html");
     }
+    return;
+  }
+
+  // Icono del ejecutable de un proceso, cacheado en disco por nombre de
+  // proceso. GET /api/icon?proc=<nombre>&pid=<pid>
+  if (route === "GET /api/icon") {
+    const proc = String(url.searchParams.get("proc") || "").replace(/[^\w.-]/g, "").slice(0, 60);
+    const pid = Number(url.searchParams.get("pid"));
+    if (!proc) return json(res, 400, { error: "proc requerido" });
+    const file = path.join(ICONS_DIR, `${proc.toLowerCase()}.png`);
+    const serve = () => {
+      res.writeHead(200, { "Content-Type": "image/png", "Cache-Control": "max-age=86400" });
+      res.end(fs.readFileSync(file));
+    };
+    if (fs.existsSync(file)) return serve();
+    if (!Number.isInteger(pid) || pid <= 0 || process.platform !== "win32") {
+      return json(res, 404, { error: "sin icono" });
+    }
+    execFile(
+      "powershell.exe",
+      [...PS_ARGS, WINCTL_PS1, "-Action", "icon", "-ProcId", String(pid)],
+      { windowsHide: true, timeout: 10000 },
+      (err, stdout) => {
+        const b64 = String(stdout || "").trim();
+        if (err || !b64) return json(res, 404, { error: "sin icono" });
+        try {
+          fs.mkdirSync(ICONS_DIR, { recursive: true });
+          fs.writeFileSync(file, Buffer.from(b64, "base64"));
+          serve();
+        } catch {
+          json(res, 404, { error: "sin icono" });
+        }
+      }
+    );
     return;
   }
 

@@ -57,10 +57,16 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
 ```
 
 - **HUD**: muestra el **nombre del escritorio actual** (tu ayuda-memoria al
-  moverte entre escritorios) y los contadores 🔔/⚙/✓. Al **pasar el mouse**,
-  un vistazo por escritorio: qué agentes hay en cada uno y su estado, sin
-  abrir el panel. Doble clic = abrir panel · arrastrar = mover · clic
-  derecho = menú.
+  moverte entre escritorios) y los contadores 🔔/⚙/✓. Doble clic = abrir
+  panel · arrastrar = mover · clic derecho = menú.
+- **Deck** (al pasar el mouse sobre el HUD): mini-panel con una fila por
+  escritorio — nombre, agentes por estado, el trabajo más relevante y nº de
+  ventanas. El que pide atención se resalta en ámbar; el actual se marca ◉.
+  - **Clic** en una fila = ir a ese escritorio · **clic derecho** = renombrarlo
+    (cambia el nombre real del escritorio de Windows).
+  - **📌 fijar**: el deck queda siempre visible — translúcido en reposo, opaco
+    al pasar el mouse — para recordar de un vistazo qué hay en cada escritorio
+    sin ningún clic. La preferencia persiste.
 - **Panel**:
   - Secciones por **escritorio virtual**; la cabecera `🖥 <nombre>` es un botón
     que cambia a ese escritorio; tu escritorio actual se marca con `◉ aquí`.
@@ -73,8 +79,10 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
     restaura el nombre de la carpeta, que es el valor por defecto.
   - Chip **🖥 Ventanas**: vista alternativa que muestra además las demás
     ventanas de cada escritorio (Teams, SSMS, navegador…) como filas
-    compactas; clic en una fila la enfoca. La preferencia se recuerda. Por
-    defecto el panel se mantiene enfocado solo en agentes.
+    compactas **con el icono real del programa**; clic en una fila la enfoca.
+    La preferencia se recuerda. Por defecto el panel se mantiene enfocado
+    solo en agentes. (Los iconos se extraen del ejecutable y se cachean en
+    `%USERPROFILE%\.atalaya\icons\`.)
   - Chips de estado filtran; caja de "Notas" para pendientes manuales.
 - **Hotkeys globales** (funcionan desde cualquier app mientras el HUD corre):
 
