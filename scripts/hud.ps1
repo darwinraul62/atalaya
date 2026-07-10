@@ -3,11 +3,21 @@
 # - Opacidad baja en reposo; resalta en ambar cuando una sesion te necesita
 # - Doble clic abre el panel completo; clic derecho abre el menu
 # - Si existe tools\VirtualDesktop*.exe intenta anclarse a todos los escritorios
+# - Hotkeys globales: Ctrl+Alt+A muestra/oculta el panel (modo quake),
+#   Ctrl+Alt+J salta a la sesion mas urgente
 # Ejecutar con powershell.exe (STA por defecto). Solo caracteres ASCII en este
 # archivo: PowerShell 5.1 no lee bien UTF-8 sin BOM.
 
 $ErrorActionPreference = "SilentlyContinue"
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class AtalayaHotkey {
+    [DllImport("user32.dll")] public static extern bool RegisterHotKey(IntPtr h, int id, uint mods, uint vk);
+    [DllImport("user32.dll")] public static extern bool UnregisterHotKey(IntPtr h, int id);
+}
+"@
 
 $HubUrl   = "http://127.0.0.1:4777"
 $StateDir = Join-Path $env:USERPROFILE ".atalaya"
@@ -81,9 +91,28 @@ function Save-Position {
 }
 
 # ---- Acciones ---------------------------------------------------------------
-function Open-Panel {
-    try { Start-Process "msedge" "--app=$HubUrl/" }
-    catch { Start-Process "$HubUrl/" }
+$WinCtl = Join-Path $RepoRoot "scripts\winctl.ps1"
+
+function Invoke-WinCtl([string]$ctlArgs) {
+    Start-Process -FilePath "powershell.exe" -WindowStyle Hidden `
+        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -File `"$WinCtl`" $ctlArgs"
+}
+
+function Open-Panel   { Invoke-WinCtl "-Action show-panel -HubUrl $HubUrl" }
+function Toggle-Panel { Invoke-WinCtl "-Action show-panel -Toggle -HubUrl $HubUrl" }
+
+function Jump-Urgent {
+    # Pide al hub saltar a la sesion que lleva mas tiempo esperando
+    try {
+        $req = [System.Net.WebRequest]::Create("$HubUrl/api/sessions/jump")
+        $req.Method = "POST"; $req.ContentType = "application/json"; $req.Timeout = 5000
+        $bytes = [System.Text.Encoding]::UTF8.GetBytes('{"urgent":true}')
+        $req.ContentLength = $bytes.Length
+        $st = $req.GetRequestStream(); $st.Write($bytes, 0, $bytes.Length); $st.Close()
+        $req.GetResponse().Close()
+    } catch {
+        Write-HudLog "salto urgente sin efecto: $_"
+    }
 }
 
 function Pin-ToAllDesktops {
@@ -172,17 +201,52 @@ $window.Add_MouseLeftButtonDown({
 })
 
 $menu = New-Object System.Windows.Controls.ContextMenu
-$miPanel = New-Object System.Windows.Controls.MenuItem; $miPanel.Header = "Abrir panel"
-$miPanel.Add_Click({ Open-Panel })
+$miPanel = New-Object System.Windows.Controls.MenuItem
+$miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = "Ctrl+Alt+A"
+$miPanel.Add_Click({ Toggle-Panel })
+$miJump = New-Object System.Windows.Controls.MenuItem
+$miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = "Ctrl+Alt+J"
+$miJump.Add_Click({ Jump-Urgent })
 $miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
 $miPin.Add_Click({ Pin-ToAllDesktops })
 $miExit = New-Object System.Windows.Controls.MenuItem; $miExit.Header = "Salir del HUD"
 $miExit.Add_Click({ $window.Close() })
 [void]$menu.Items.Add($miPanel)
+[void]$menu.Items.Add($miJump)
 [void]$menu.Items.Add($miPin)
 [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
 [void]$menu.Items.Add($miExit)
 $window.ContextMenu = $menu
+
+# ---- Hotkeys globales ---------------------------------------------------------
+$HotkeyHook = {
+    param([IntPtr]$hwnd, [int]$msg, [IntPtr]$wParam, [IntPtr]$lParam, [ref]$handled)
+    if ($msg -eq 0x0312) {  # WM_HOTKEY
+        switch ($wParam.ToInt32()) {
+            1 { Toggle-Panel }
+            2 { Jump-Urgent }
+        }
+        $handled.Value = $true
+    }
+    return [IntPtr]::Zero
+}
+
+function Register-Hotkeys {
+    try {
+        $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
+        $script:HwndSource = [System.Windows.Interop.HwndSource]::FromHwnd($helper.Handle)
+        $script:HwndSource.AddHook($HotkeyHook)
+        $mod = 0x0002 -bor 0x0001  # MOD_CONTROL | MOD_ALT
+        if (-not [AtalayaHotkey]::RegisterHotKey($helper.Handle, 1, $mod, 0x41)) {
+            Write-HudLog "hotkey Ctrl+Alt+A no disponible (ya en uso por otra app)"
+        }
+        if (-not [AtalayaHotkey]::RegisterHotKey($helper.Handle, 2, $mod, 0x4A)) {
+            Write-HudLog "hotkey Ctrl+Alt+J no disponible (ya en uso por otra app)"
+        }
+    } catch {
+        Write-HudLog "hotkeys error: $_"
+    }
+}
 
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromSeconds(3)
@@ -192,11 +256,17 @@ $window.Add_ContentRendered({
     Update-Hud
     $timer.Start()
     Pin-ToAllDesktops
+    Register-Hotkeys
 })
 
 $window.Add_Closed({
     $timer.Stop()
     Save-Position
+    try {
+        $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
+        [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, 1)
+        [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, 2)
+    } catch { }
     try { Remove-Item (Join-Path $StateDir "hud.pid") -Force } catch { }
 })
 

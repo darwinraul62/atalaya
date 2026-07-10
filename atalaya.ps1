@@ -112,7 +112,9 @@ if ($hudPid) {
 }
 
 if ($Panel) {
-    try { Start-Process "msedge" "--app=$HubUrl/" } catch { Start-Process "$HubUrl/" }
+    # show-panel reutiliza la ventana del panel si ya existe (no crea duplicados)
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $RepoRoot "scripts\winctl.ps1") -Action show-panel -HubUrl $HubUrl | Out-Null
 }
 
-Write-Host "Atalaya listo. Panel: $HubUrl (doble clic en el HUD para abrirlo)."
+Write-Host "Atalaya listo. Panel: $HubUrl (doble clic en el HUD o Ctrl+Alt+A)."

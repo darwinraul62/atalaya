@@ -7,6 +7,8 @@
  * - Empuja cambios en vivo por SSE (/events)
  * - Dispara toasts nativos de Windows en transiciones que requieren atención
  * - Gestiona notas manuales (~/.atalaya/notes.json)
+ * - Asocia cada sesión con su ventana/escritorio (captura del primer plano al
+ *   recibir un prompt) y permite saltar a ella (POST /api/sessions/jump)
  *
  * Sin dependencias: solo la librería estándar de Node.
  */
@@ -19,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.1.0";
+const VERSION = "0.2.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -29,6 +31,10 @@ const NOTES_FILE = path.join(STATE_DIR, "notes.json");
 const LOG_FILE = path.join(STATE_DIR, "hub.log");
 const UI_FILE = path.join(REPO_ROOT, "ui", "index.html");
 const TOAST_PS1 = path.join(REPO_ROOT, "scripts", "toast.ps1");
+const WINCTL_PS1 = path.join(REPO_ROOT, "scripts", "winctl.ps1");
+const WINDOWS_FILE = path.join(STATE_DIR, "windows.json");
+const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
+const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"];
 
 const STALE_HOURS = 12; // sesiones sin actividad más antiguas no se muestran
 const PURGE_HOURS = 72; // fichas más antiguas se borran del disco
@@ -84,10 +90,96 @@ function matchWorkspace(workspaces, cwd) {
   return best;
 }
 
+// ── Ventanas por sesión ─────────────────────────────────────────────────────
+// Mapa sessionId → { hwnd, title, desktop, desktopName, capturedAt } capturado
+// cuando la sesión pasa a "working": en ese instante la ventana en primer
+// plano es (casi siempre) la terminal donde el usuario acaba de escribir.
+
+function loadWindows() {
+  try {
+    const map = JSON.parse(fs.readFileSync(WINDOWS_FILE, "utf8"));
+    return map && typeof map === "object" ? map : {};
+  } catch {
+    return {};
+  }
+}
+
+function saveWindows(map) {
+  try {
+    fs.writeFileSync(WINDOWS_FILE, JSON.stringify(map, null, 2));
+  } catch (e) {
+    log(`windows.json error: ${e.message}`);
+  }
+}
+
+function captureWindowContext(sessionIds) {
+  if (process.platform !== "win32" || !sessionIds.length) return;
+  execFile(
+    "powershell.exe",
+    [...PS_ARGS, WINCTL_PS1, "-Action", "foreground"],
+    { windowsHide: true, timeout: 8000 },
+    (err, stdout) => {
+      if (err) return log(`captura ventana error: ${err.message}`);
+      let info;
+      try {
+        info = JSON.parse(String(stdout).trim());
+      } catch {
+        return;
+      }
+      if (!info || !info.hwnd) return;
+      const finish = (desktop, desktopName) => {
+        const map = loadWindows();
+        for (const id of sessionIds) {
+          map[id] = {
+            hwnd: info.hwnd,
+            title: info.title || null,
+            desktop,
+            desktopName,
+            capturedAt: new Date().toISOString(),
+          };
+        }
+        saveWindows(map);
+        scheduleBroadcast();
+      };
+      if (!fs.existsSync(VDESK_EXE)) return finish(null, null);
+      execFile(
+        VDESK_EXE,
+        [`/GetDesktopFromWindowHandle:${info.hwnd}`],
+        { windowsHide: true, timeout: 5000 },
+        (e2, out2) => {
+          // Salida: "Window is on desktop number 1 (desktop 'Dev')"
+          const m = String(out2 || "").match(/desktop number (\d+)(?:\s*\(desktop '([^']*)'\))?/);
+          if (m) finish(Number(m[1]), m[2] || null);
+          else finish(null, null);
+        }
+      );
+    }
+  );
+}
+
+function jumpToWindow(hwnd, cb) {
+  execFile(
+    "powershell.exe",
+    [...PS_ARGS, WINCTL_PS1, "-Action", "focus", "-Hwnd", String(hwnd)],
+    { windowsHide: true, timeout: 10000 },
+    (err, stdout) => {
+      let ok = false;
+      try {
+        ok = !!JSON.parse(String(stdout).trim()).ok;
+      } catch {
+        /* sin salida parseable */
+      }
+      if (!ok) log(`jump fallo hwnd=${hwnd}: ${err ? err.message : String(stdout).trim()}`);
+      cb(ok);
+    }
+  );
+}
+
 // ── Sesiones ────────────────────────────────────────────────────────────────
 
 function loadSessions() {
   const workspaces = loadWorkspaces();
+  const windows = loadWindows();
   const sessions = [];
   let files = [];
   try {
@@ -107,6 +199,10 @@ function loadSessions() {
       s.workspace = ws ? ws.name : null;
       s.desktop = ws ? ws.desktop || null : null;
       s.ports = ws ? ws.ports || null : null;
+      const w = windows[s.sessionId];
+      s.hwnd = w ? w.hwnd : null;
+      s.desktopNum = w && w.desktop !== null && w.desktop !== undefined ? w.desktop : null;
+      s.desktopName = w ? w.desktopName || null : null;
       sessions.push(s);
     } catch {
       /* ficha corrupta o a medio escribir: se ignora */
@@ -138,6 +234,23 @@ function purgeOldSessions() {
         /* ignorar */
       }
     }
+  }
+  // Ventanas huérfanas: fuera las de sesiones que ya no tienen ficha
+  try {
+    const alive = new Set(
+      fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith(".json")).map((f) => f.slice(0, -5))
+    );
+    const map = loadWindows();
+    let changed = false;
+    for (const id of Object.keys(map)) {
+      if (!alive.has(id)) {
+        delete map[id];
+        changed = true;
+      }
+    }
+    if (changed) saveWindows(map);
+  } catch {
+    /* opcional */
   }
 }
 
@@ -208,10 +321,13 @@ function showToast(title, body) {
 
 function checkTransitions(payload) {
   const now = Date.now();
+  const toCapture = [];
   for (const s of payload.sessions) {
     const prev = prevStatus.get(s.sessionId);
     prevStatus.set(s.sessionId, s.status);
     if (!prev || prev === s.status) continue;
+    // Acaba de recibir un prompt: la ventana activa es la de esta sesión
+    if (s.status === "working") toCapture.push(s.sessionId);
     if (s.status !== "needs_you" && s.status !== "ready") continue;
     if (now - (lastToast.get(s.sessionId) || 0) < 15e3) continue;
     lastToast.set(s.sessionId, now);
@@ -222,6 +338,7 @@ function checkTransitions(payload) {
       showToast(`Listo: ${s.project}${where}`, s.task || "Turno terminado, listo para revisar");
     }
   }
+  if (toCapture.length) captureWindowContext(toCapture);
 }
 
 // ── SSE ─────────────────────────────────────────────────────────────────────
@@ -316,6 +433,31 @@ const server = http.createServer(async (req, res) => {
 
   if (route === "GET /api/summary") {
     return json(res, 200, buildSummary(buildPayload()));
+  }
+
+  if (route === "POST /api/sessions/jump") {
+    const body = await readBody(req);
+    let id = body.sessionId || null;
+    if (!id && body.urgent) {
+      // La sesión que lleva más tiempo esperándote; si no hay, la lista más antigua
+      const sessions = buildPayload().sessions;
+      const oldest = (st) =>
+        sessions
+          .filter((s) => s.status === st)
+          .sort((a, b) => String(a.statusSince).localeCompare(String(b.statusSince)))[0];
+      const target = oldest("needs_you") || oldest("ready");
+      id = target ? target.sessionId : null;
+    }
+    if (!id) return json(res, 404, { error: "no hay sesión que atender" });
+    const w = loadWindows()[id];
+    if (!w || !w.hwnd) {
+      return json(res, 409, { error: "sin ventana registrada: envía un prompt en esa sesión" });
+    }
+    jumpToWindow(w.hwnd, (ok) => {
+      if (ok) json(res, 200, { ok: true });
+      else json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
+    });
+    return;
   }
 
   if (route === "POST /api/notes") {

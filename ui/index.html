@@ -69,10 +69,18 @@
   .clone { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
   .agent { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .05em; text-transform: uppercase; }
   .host { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--chrome); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
+  .desk { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--ink-2); border: 1px solid var(--line); border-radius: 4px; padding: 0 5px; }
   .task { color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
   .msg { color: var(--attn); font-size: 12px; font-weight: 600; }
   .card-bottom { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .branch { font-family: var(--mono); font-size: 11px; color: var(--ink-2); background: var(--panel-2); border-radius: 5px; padding: 1px 7px; }
+  button.jump {
+    display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--chrome); border-radius: 6px; padding: 2px 9px;
+    font: 600 11.5px var(--ui); cursor: pointer; white-space: nowrap;
+  }
+  button.jump:hover:enabled { border-color: var(--chrome); }
+  button.jump:disabled { opacity: .55; cursor: default; }
   .pill { display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px var(--ui); border-radius: 999px; padding: 2px 9px; margin-left: auto; white-space: nowrap; }
   .pill .t { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 500; }
   [data-status="working"] .pill { color: var(--work); background: var(--work-bg); }
@@ -169,6 +177,11 @@ function sessionCard(s) {
   const clone = cwdTail(s.cwd) + (s.ports ? " · :" + s.ports : "");
   top.append(el("span", "clone", clone));
   if (s.host === "wsl") top.append(el("span", "host", "WSL"));
+  if (s.desktopName || s.desktopNum !== null && s.desktopNum !== undefined) {
+    const badge = el("span", "desk", "🖥 " + (s.desktopName || "Escritorio " + (s.desktopNum + 1)));
+    badge.title = "Escritorio virtual donde vive esta sesión";
+    top.append(badge);
+  }
   top.append(el("span", "agent", s.agent || "agente"));
   card.append(top);
 
@@ -177,6 +190,31 @@ function sessionCard(s) {
 
   const bottom = el("div", "card-bottom");
   if (s.branch) bottom.append(el("span", "branch", s.branch));
+  if (s.hwnd) {
+    const jump = el("button", "jump", "↗ Ir");
+    jump.title = "Cambiar a su escritorio y enfocar su ventana";
+    jump.addEventListener("click", async () => {
+      jump.disabled = true;
+      let msg = null;
+      try {
+        const r = await fetch("/api/sessions/jump", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ sessionId: s.sessionId }),
+        });
+        if (!r.ok) msg = (await r.json()).error || "no se pudo saltar";
+      } catch {
+        msg = "hub sin conexión";
+      }
+      if (msg) {
+        jump.textContent = "✕ " + msg;
+        setTimeout(() => { jump.textContent = "↗ Ir"; jump.disabled = false; }, 3000);
+      } else {
+        jump.disabled = false;
+      }
+    });
+    bottom.append(jump);
+  }
   const st = STATUS[s.status] || STATUS.idle;
   const pill = el("span", "pill");
   pill.append(el("span", "glyph", st.glyph));

@@ -20,7 +20,9 @@ Claude Code / Codex ──hooks──▶ ~/.atalaya/sessions/*.json ──▶ hu
    al `.atalaya` de Windows vía `/mnt/c` (variable `ATALAYA_DIR`).
 2. **Hub** (`src/hub.js`, sin dependencias): vigila la carpeta de estado, sirve
    el panel en `http://localhost:4777`, empuja cambios por SSE y dispara toasts
-   nativos cuando una sesión pasa a "te necesita" o "listo".
+   nativos cuando una sesión pasa a "te necesita" o "listo". Además asocia cada
+   sesión con su ventana y escritorio virtual (vía `scripts/winctl.ps1` y
+   `tools/VirtualDesktop.exe`) para poder saltar a ella desde el panel.
 3. **HUD** (`scripts/hud.ps1`): pastilla flotante siempre-al-frente con el
    resumen (🔔 te necesita · ⚙ trabajando · ✓ listo). Semitransparente en
    reposo; se enciende en ámbar cuando algo requiere atención. Arrastrable,
@@ -54,7 +56,34 @@ atalaya.cmd -InstallAutostart  :: arrancar con Windows
 
 - **HUD**: doble clic = abrir panel · arrastrar = mover · clic derecho = menú.
 - **Panel**: chips superiores filtran por estado; caja de "Notas" para anotar
-  en qué quedaste en tareas manuales.
+  en qué quedaste en tareas manuales; botón **↗ Ir** en cada tarjeta para
+  saltar a esa sesión.
+- **Hotkeys globales** (funcionan desde cualquier app mientras el HUD corre):
+
+  | Atajo | Acción |
+  |---|---|
+  | `Ctrl+Alt+A` | Mostrar/ocultar el panel (modo quake: aparece en el escritorio actual) |
+  | `Ctrl+Alt+J` | Saltar a la sesión más urgente (la que lleva más tiempo esperándote) |
+
+## Saltar a una sesión
+
+Cuando envías un prompt, el hub captura la ventana que está en primer plano
+(es la terminal donde acabas de escribir) y el escritorio virtual donde vive.
+Con eso, cada tarjeta del panel muestra su escritorio (🖥) y el botón **↗ Ir**
+cambia a ese escritorio y enfoca esa ventana. `Ctrl+Alt+J` hace lo mismo con
+la sesión que más tiempo lleva en "te necesita" (o en "listo" si no hay nadie
+esperando).
+
+Límites conocidos de la heurística:
+
+- Una sesión recién abierta no tiene ventana asociada hasta su **primer
+  prompt** (el botón aparece a partir de ahí).
+- Si cambias de ventana en el mismo instante en que envías el prompt, puede
+  capturarse la ventana equivocada; se corrige sola con el siguiente prompt.
+- Varias sesiones en pestañas de la **misma** ventana de terminal comparten
+  ventana: el salto enfoca la ventana, no la pestaña.
+- El cambio de escritorio usa `tools\VirtualDesktop.exe`; sin él, el salto
+  solo enfoca la ventana (Windows puede o no cruzar de escritorio).
 
 ## Instalación
 
