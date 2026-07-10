@@ -3,6 +3,10 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- Color de la barra de titulo de la ventana --app (sin esto Edge inventa uno) -->
+<meta name="theme-color" media="(prefers-color-scheme: light)" content="#f2f4f6">
+<meta name="theme-color" media="(prefers-color-scheme: dark)" content="#10151b">
+<meta name="theme-color" content="#10151b">
 <title>Atalaya</title>
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>📡</text></svg>">
 <style>
@@ -227,7 +231,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.8.1";
+const UI_VERSION = "0.8.2";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
