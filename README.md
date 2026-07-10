@@ -1,0 +1,141 @@
+# Atalaya
+
+Monitor de sesiones paralelas de agentes (Claude Code / Codex) a través de
+escritorios virtuales de Windows y WSL. Resuelve la pérdida de contexto al
+trabajar en varios clones/proyectos a la vez: en cualquier escritorio ves qué
+sesión está trabajando, cuál terminó (y hace cuánto) y cuál espera tu respuesta.
+
+## Cómo funciona
+
+```
+Claude Code / Codex ──hooks──▶ ~/.atalaya/sessions/*.json ──▶ hub (Node, :4777)
+                                                              ├─▶ Panel web (msedge --app)
+                                                              ├─▶ HUD flotante (WPF, topmost)
+                                                              └─▶ Toasts de Windows
+```
+
+1. **Hooks** (`hooks/claude-hook.mjs`): registrados en `~/.claude/settings.json`
+   para `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop` y `SessionEnd`.
+   Cada evento actualiza la ficha JSON de la sesión. Desde WSL, el hook escribe
+   al `.atalaya` de Windows vía `/mnt/c` (variable `ATALAYA_DIR`).
+2. **Hub** (`src/hub.js`, sin dependencias): vigila la carpeta de estado, sirve
+   el panel en `http://localhost:4777`, empuja cambios por SSE y dispara toasts
+   nativos cuando una sesión pasa a "te necesita" o "listo".
+3. **HUD** (`scripts/hud.ps1`): pastilla flotante siempre-al-frente con el
+   resumen (🔔 te necesita · ⚙ trabajando · ✓ listo). Semitransparente en
+   reposo; se enciende en ámbar cuando algo requiere atención. Arrastrable,
+   posición persistida. Doble clic abre el panel completo.
+4. **Panel** (`ui/index.html`): tablero agrupado por workspace/escritorio con
+   tarjeta por sesión (proyecto, clone, rama, tarea, estado y tiempo), filtros
+   por estado y notas manuales para pendientes no-agente (ofimática, etc.).
+
+## Estados de una sesión
+
+| Evento de Claude Code | Estado | En el panel |
+|---|---|---|
+| `UserPromptSubmit` | `working` | ⚙ Trabajando (captura el prompt como tarea) |
+| `Notification` | `needs_you` | 🔔 Te necesita (permiso o espera de respuesta) |
+| `Stop` | `ready` | ✓ Listo para revisar |
+| `SessionStart` | `idle` | · En espera |
+| `SessionEnd` | `closed` | desaparece |
+
+Las sesiones sin actividad por más de 12 h dejan de mostrarse; las fichas se
+purgan del disco a las 72 h.
+
+## Uso diario
+
+```bat
+atalaya.cmd                    :: arranca hub + HUD (idempotente)
+atalaya.cmd -Panel             :: además abre el panel completo
+atalaya.cmd -Status            :: estado de hub y HUD
+atalaya.cmd -Stop              :: detiene todo
+atalaya.cmd -InstallAutostart  :: arrancar con Windows
+```
+
+- **HUD**: doble clic = abrir panel · arrastrar = mover · clic derecho = menú.
+- **Panel**: chips superiores filtran por estado; caja de "Notas" para anotar
+  en qué quedaste en tareas manuales.
+
+## Instalación
+
+Requisitos:
+
+- Windows 10/11 (los escritorios virtuales y los toasts son nativos de Windows).
+- Node.js ≥ 18 en Windows — y también dentro de WSL si usas Claude Code ahí
+  (vale el de nvm; el instalador captura su ruta absoluta).
+- PowerShell 5.1 (incluido en Windows; no requiere PowerShell 7).
+
+Todo es relativo a la carpeta del repo: clónalo donde quieras, no hay rutas
+fijas. Los instaladores calculan sus rutas a partir de su propia ubicación.
+
+```bat
+git clone <url-del-repo> atalaya
+cd atalaya
+node hooks\install.mjs             :: hooks de Claude Code en Windows (hace backup)
+wsl -e bash hooks/install-wsl.sh   :: hooks de Claude Code en WSL (si aplica)
+copy workspaces.example.json workspaces.json   :: edítalo con tus proyectos
+atalaya.cmd                        :: arrancar hub + HUD
+atalaya.cmd -InstallAutostart      :: opcional: arrancar con Windows
+```
+
+Las sesiones de Claude Code ya abiertas deben **reiniciarse** para tomar los
+hooks. Para desinstalar: `node hooks\install.mjs --uninstall` (igual en WSL).
+
+Qué toca fuera del repo (y nada más): `~/.claude/settings.json` (hooks, con
+backup previo), `%USERPROFILE%\.atalaya\` (estado) y, si usas
+`-InstallAutostart`, un acceso directo en la carpeta Inicio del usuario.
+
+### Anclar el HUD a todos los escritorios virtuales
+
+Automático (recomendado): compila el CLI de MScholtes/VirtualDesktop
+(descarga el fuente de GitHub y lo compila con el csc.exe incluido en Windows):
+
+```bat
+powershell -ExecutionPolicy Bypass -File tools\get-virtualdesktop.ps1
+```
+
+Con `tools\VirtualDesktop.exe` presente, el HUD se ancla solo al arrancar
+(también desde su menú contextual). Sin él, ancla manual: **Win+Tab → clic
+derecho sobre el HUD → "Mostrar esta ventana en todos los escritorios"**.
+
+### Codex CLI (opcional)
+
+En `~/.codex/config.toml`:
+
+```toml
+notify = ["node", "C:\\ruta\\al\\repo\\atalaya\\hooks\\codex-notify.mjs"]
+```
+
+Codex solo notifica fin de turno y aprobaciones, así que su tarjeta muestra
+"listo" / "te necesita" (no hay estado "trabajando").
+
+## Configuración de workspaces
+
+`workspaces.json` (no versionado; se crea desde `workspaces.example.json`)
+agrupa las sesiones por proyecto y les asocia escritorio y puertos:
+
+```json
+{
+  "workspaces": [
+    {
+      "name": "RP3 · Facturación",
+      "desktop": "Win+1",
+      "match": ["C:\\Users\\<tu-usuario>\\source\\repos\\mi-api", "/home/<tu-usuario-wsl>/repos/mi-api"],
+      "ports": "5010-5019"
+    }
+  ]
+}
+```
+
+`match` compara por prefijo de ruta (insensible a mayúsculas; los `/mnt/c/...`
+de WSL se normalizan a `c:/...`). La coincidencia más larga gana. El hub
+recarga el archivo automáticamente al guardarlo.
+
+## Estado y diagnóstico
+
+- Estado central: `%USERPROFILE%\.atalaya\` (`sessions/`, `notes.json`,
+  `hub.log`, `hook-errors.log`, `hud.json` con la posición del HUD).
+- El hook **nunca** escribe a stdout ni falla (exit 0 siempre) para no
+  interferir con Claude Code; sus errores van a `hook-errors.log`.
+- Si el HUD marca "sin conexión": ejecuta `atalaya.cmd` (rearranca el hub).
+- Puerto configurable con la variable de entorno `ATALAYA_PORT` (por defecto 4777).

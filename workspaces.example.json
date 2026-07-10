@@ -1,0 +1,20 @@
+{
+  "$comment": "Atalaya — registro de workspaces. Cada entrada agrupa sesiones cuyo cwd empiece por alguna ruta de 'match' (insensible a mayúsculas, gana la coincidencia más larga). 'desktop' es una etiqueta libre (p. ej. 'Win+1'), 'ports' es informativo para mostrar en la tarjeta.",
+  "workspaces": [
+    {
+      "name": "Mi API · Facturación",
+      "desktop": "Win+1",
+      "match": [
+        "C:\\Users\\<tu-usuario>\\source\\repos\\mi-api",
+        "/home/<tu-usuario-wsl>/repos/mi-api"
+      ],
+      "ports": "5010-5019"
+    },
+    {
+      "name": "Portal web",
+      "desktop": "Win+2",
+      "match": ["C:\\Users\\<tu-usuario>\\source\\repos\\portal-web"],
+      "ports": "3000"
+    }
+  ]
+}

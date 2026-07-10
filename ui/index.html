@@ -1,0 +1,335 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Atalaya</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'><text y='13' font-size='13'>📡</text></svg>">
+<style>
+  :root {
+    --bg: #f2f4f6; --panel: #ffffff; --panel-2: #eaeef1; --ink: #1d2833;
+    --ink-2: #5a6a78; --ink-3: #8b99a6; --line: #d7dee4; --chrome: #3d6a8f;
+    --work: #3d7fc4; --work-bg: #e3eef9; --attn: #b97718; --attn-bg: #faf0dd;
+    --ready: #0f8a80; --ready-bg: #def0ee; --idle: #7d8b97; --idle-bg: #edf0f2;
+    --shadow: 0 1px 3px rgba(29,40,51,.08);
+    --mono: "Cascadia Mono", "Cascadia Code", Consolas, monospace;
+    --ui: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #10151b; --panel: #1a212a; --panel-2: #141a21; --ink: #dbe3ea;
+      --ink-2: #93a2b0; --ink-3: #64737f; --line: #2a3542; --chrome: #6fa3cc;
+      --work: #5b9cd9; --work-bg: #1b2c3e; --attn: #e0a33f; --attn-bg: #33270f;
+      --ready: #3fb3a8; --ready-bg: #0f2a28; --idle: #6e7d8a; --idle-bg: #1e252d;
+      --shadow: 0 1px 3px rgba(0,0,0,.4);
+    }
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    background: var(--bg); color: var(--ink); font: 14px/1.45 var(--ui);
+    padding-bottom: 48px;
+  }
+  .frame { max-width: 1060px; margin: 0 auto; padding: 0 20px; }
+
+  header.bar { background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  .bar-inner { max-width: 1060px; margin: 0 auto; padding: 10px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .brand { display: flex; align-items: baseline; gap: 10px; }
+  .brand strong { font-size: 17px; font-weight: 650; }
+  .brand span { font-family: var(--mono); font-size: 11px; color: var(--ink-3); letter-spacing: .06em; text-transform: uppercase; }
+  #offline {
+    display: none; background: var(--attn-bg); color: var(--attn);
+    font-weight: 600; font-size: 12.5px; border-radius: 6px; padding: 3px 10px;
+  }
+  body.offline #offline { display: inline-block; }
+
+  .chips { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  button.chip {
+    display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line);
+    background: var(--panel); color: var(--ink-2); border-radius: 999px; padding: 4px 12px;
+    font: 600 12.5px var(--ui); cursor: pointer;
+  }
+  button.chip:hover { border-color: var(--ink-3); }
+  button.chip:focus-visible, .card:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--chrome); outline-offset: 2px; }
+  button.chip[aria-pressed="true"] { border-color: currentColor; background: var(--panel-2); }
+  .chip .n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .chip.attn { color: var(--attn); } .chip.work { color: var(--work); }
+  .chip.ready { color: var(--ready); } .chip.idle { color: var(--idle); }
+
+  .desktops { display: grid; gap: 16px; margin-top: 20px; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+  .desktop { background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 12px; display: flex; flex-direction: column; gap: 10px; align-self: start; }
+  .desktop-h { display: flex; align-items: center; gap: 8px; padding: 0 4px; color: var(--ink-2); }
+  .desktop-h .key { font-family: var(--mono); font-size: 11px; font-weight: 600; border: 1px solid var(--line); border-radius: 5px; padding: 1px 7px; background: var(--panel); }
+  .desktop-h h2 { font-size: 13px; font-weight: 650; letter-spacing: .02em; }
+  .desktop-h .count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 7px; }
+  .card[data-status="needs_you"] { border-color: color-mix(in srgb, var(--attn) 55%, var(--line)); }
+  .card-top { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .proj { font-weight: 650; font-size: 13.5px; }
+  .clone { font-family: var(--mono); font-size: 11px; color: var(--ink-3); }
+  .agent { margin-left: auto; font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); letter-spacing: .05em; text-transform: uppercase; }
+  .host { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--chrome); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
+  .task { color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
+  .msg { color: var(--attn); font-size: 12px; font-weight: 600; }
+  .card-bottom { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .branch { font-family: var(--mono); font-size: 11px; color: var(--ink-2); background: var(--panel-2); border-radius: 5px; padding: 1px 7px; }
+  .pill { display: inline-flex; align-items: center; gap: 6px; font: 600 11.5px var(--ui); border-radius: 999px; padding: 2px 9px; margin-left: auto; white-space: nowrap; }
+  .pill .t { font-family: var(--mono); font-variant-numeric: tabular-nums; font-weight: 500; }
+  [data-status="working"] .pill { color: var(--work); background: var(--work-bg); }
+  [data-status="needs_you"] .pill { color: var(--attn); background: var(--attn-bg); }
+  [data-status="ready"] .pill { color: var(--ready); background: var(--ready-bg); }
+  [data-status="idle"] .pill { color: var(--idle); background: var(--idle-bg); }
+  @keyframes pulse { 50% { opacity: .35; } }
+  [data-status="working"] .glyph { animation: pulse 1.6s ease-in-out infinite; display: inline-block; }
+  @media (prefers-reduced-motion: reduce) { [data-status="working"] .glyph { animation: none; } }
+  .card.dim { opacity: .3; }
+  .empty { color: var(--ink-3); font-size: 12.5px; padding: 4px; }
+
+  .note-card { display: flex; gap: 8px; align-items: flex-start; }
+  .note-card .task { flex: 1; }
+  .note-del { border: none; background: none; color: var(--ink-3); cursor: pointer; font-size: 14px; line-height: 1; padding: 2px; }
+  .note-del:hover { color: var(--attn); }
+  .note-form { display: flex; gap: 6px; }
+  .note-form input {
+    flex: 1; border: 1px solid var(--line); background: var(--panel); color: var(--ink);
+    border-radius: 6px; padding: 6px 9px; font: 12.5px var(--ui);
+  }
+  .note-form button {
+    border: 1px solid var(--line); background: var(--panel); color: var(--ink-2);
+    border-radius: 6px; padding: 6px 12px; font: 600 12.5px var(--ui); cursor: pointer;
+  }
+  .note-form button:hover { border-color: var(--chrome); color: var(--chrome); }
+  .updated { margin-top: 20px; color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
+</style>
+</head>
+<body>
+<header class="bar">
+  <div class="bar-inner">
+    <div class="brand"><strong>Atalaya</strong><span>monitor de sesiones</span></div>
+    <span id="offline">⚠ sin conexión con el hub — reintentando…</span>
+    <div class="chips" role="group" aria-label="Filtrar por estado" id="chips">
+      <button class="chip attn" data-f="needs_you" aria-pressed="false">🔔 Te necesita <span class="n">0</span></button>
+      <button class="chip work" data-f="working" aria-pressed="false">⚙ Trabajando <span class="n">0</span></button>
+      <button class="chip ready" data-f="ready" aria-pressed="false">✓ Listo <span class="n">0</span></button>
+      <button class="chip idle" data-f="idle" aria-pressed="false">· Inactivo <span class="n">0</span></button>
+    </div>
+  </div>
+</header>
+
+<div class="frame">
+  <div class="desktops" id="board"></div>
+  <p class="updated" id="updated"></p>
+</div>
+
+<script>
+"use strict";
+
+const STATUS = {
+  needs_you: { glyph: "🔔", label: "Te necesita" },
+  working:   { glyph: "⚙", label: "Trabajando" },
+  ready:     { glyph: "✓", label: "Listo para revisar" },
+  idle:      { glyph: "·", label: "En espera" },
+};
+const ORDER = ["needs_you", "ready", "working", "idle"];
+
+let state = { sessions: [], notes: [], workspaceOrder: [], generatedAt: null };
+let filter = null;
+
+function el(tag, cls, text) {
+  const n = document.createElement(tag);
+  if (cls) n.className = cls;
+  if (text !== undefined) n.textContent = text;
+  return n;
+}
+
+function elapsed(iso) {
+  const ms = Date.now() - Date.parse(iso);
+  if (isNaN(ms) || ms < 0) return "";
+  const min = Math.floor(ms / 60000);
+  if (min < 1) return "ahora";
+  if (min < 60) return min + " min";
+  const h = Math.floor(min / 60);
+  if (h < 24) return h + " h " + (min % 60) + " min";
+  return Math.floor(h / 24) + " d";
+}
+
+function cwdTail(cwd) {
+  const parts = String(cwd || "").replace(/\\/g, "/").split("/").filter(Boolean);
+  return parts.slice(-2).join("/");
+}
+
+function sessionCard(s) {
+  const card = el("article", "card");
+  card.dataset.status = s.status;
+  card.tabIndex = 0;
+  if (filter && s.status !== filter) card.classList.add("dim");
+
+  const top = el("div", "card-top");
+  top.append(el("span", "proj", s.project || "?"));
+  const clone = cwdTail(s.cwd) + (s.ports ? " · :" + s.ports : "");
+  top.append(el("span", "clone", clone));
+  if (s.host === "wsl") top.append(el("span", "host", "WSL"));
+  top.append(el("span", "agent", s.agent || "agente"));
+  card.append(top);
+
+  if (s.task) card.append(el("div", "task", s.task));
+  if (s.status === "needs_you" && s.message) card.append(el("div", "msg", s.message));
+
+  const bottom = el("div", "card-bottom");
+  if (s.branch) bottom.append(el("span", "branch", s.branch));
+  const st = STATUS[s.status] || STATUS.idle;
+  const pill = el("span", "pill");
+  pill.append(el("span", "glyph", st.glyph));
+  pill.append(document.createTextNode(st.label + " · "));
+  const t = el("span", "t", elapsed(s.statusSince || s.updatedAt));
+  t.dataset.since = s.statusSince || s.updatedAt;
+  pill.append(t);
+  bottom.append(pill);
+  card.append(bottom);
+  return card;
+}
+
+function noteCard(n) {
+  const card = el("article", "card note-card");
+  card.dataset.status = "idle";
+  const body = el("div", "task", n.text);
+  const del = el("button", "note-del", "✕");
+  del.title = "Eliminar nota";
+  del.addEventListener("click", async () => {
+    await fetch("/api/notes/delete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: n.id }),
+    });
+  });
+  const pill = el("span", "pill");
+  const t = el("span", "t", elapsed(n.createdAt));
+  t.dataset.since = n.createdAt;
+  pill.append(document.createTextNode("Anotado · "));
+  pill.append(t);
+  const wrap = el("div");
+  wrap.style.cssText = "display:flex;flex-direction:column;gap:6px;flex:1";
+  wrap.append(body, pill);
+  card.append(wrap, del);
+  return card;
+}
+
+function groupSessions() {
+  const groups = new Map();
+  for (const s of state.sessions) {
+    const key = s.workspace || s.parentDir || "Otros proyectos";
+    if (!groups.has(key)) groups.set(key, { name: key, desktop: s.desktop, items: [] });
+    const g = groups.get(key);
+    if (!g.desktop && s.desktop) g.desktop = s.desktop;
+    g.items.push(s);
+  }
+  const ordered = [];
+  for (const name of state.workspaceOrder) {
+    if (groups.has(name)) { ordered.push(groups.get(name)); groups.delete(name); }
+  }
+  ordered.push(...groups.values());
+  for (const g of ordered) {
+    g.items.sort((a, b) => {
+      const d = ORDER.indexOf(a.status) - ORDER.indexOf(b.status);
+      return d !== 0 ? d : String(a.statusSince).localeCompare(String(b.statusSince));
+    });
+  }
+  return ordered;
+}
+
+function render() {
+  const board = document.getElementById("board");
+  board.replaceChildren();
+
+  for (const g of groupSessions()) {
+    const sec = el("section", "desktop");
+    const h = el("div", "desktop-h");
+    if (g.desktop) h.append(el("span", "key", g.desktop));
+    h.append(el("h2", null, g.name));
+    h.append(el("span", "count", g.items.length + (g.items.length === 1 ? " sesión" : " sesiones")));
+    sec.append(h);
+    for (const s of g.items) sec.append(sessionCard(s));
+    board.append(sec);
+  }
+
+  if (!state.sessions.length) {
+    const sec = el("section", "desktop");
+    sec.append(el("div", "empty",
+      "Sin sesiones activas. Abre una sesión de Claude Code (con los hooks instalados) y aparecerá aquí."));
+    board.append(sec);
+  }
+
+  // Grupo de notas manuales
+  const sec = el("section", "desktop");
+  const h = el("div", "desktop-h");
+  h.append(el("h2", null, "Notas · pendientes manuales"));
+  h.append(el("span", "count", state.notes.length + (state.notes.length === 1 ? " nota" : " notas")));
+  sec.append(h);
+  for (const n of state.notes) sec.append(noteCard(n));
+  const form = el("div", "note-form");
+  const input = el("input");
+  input.placeholder = "Anotar en qué quedaste… (Enter)";
+  input.maxLength = 300;
+  const btn = el("button", null, "Añadir");
+  async function addNote() {
+    const text = input.value.trim();
+    if (!text) return;
+    input.value = "";
+    await fetch("/api/notes", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+    });
+  }
+  input.addEventListener("keydown", (e) => e.key === "Enter" && addNote());
+  btn.addEventListener("click", addNote);
+  form.append(input, btn);
+  sec.append(form);
+  board.append(sec);
+
+  // Chips
+  const counts = { needs_you: 0, working: 0, ready: 0, idle: 0 };
+  for (const s of state.sessions) if (counts[s.status] !== undefined) counts[s.status]++;
+  document.querySelectorAll("#chips .chip").forEach((chip) => {
+    chip.querySelector(".n").textContent = counts[chip.dataset.f];
+    chip.setAttribute("aria-pressed", String(chip.dataset.f === filter));
+  });
+
+  document.getElementById("updated").textContent =
+    "actualizado " + new Date(state.generatedAt || Date.now()).toLocaleTimeString();
+}
+
+document.querySelectorAll("#chips .chip").forEach((chip) => {
+  chip.addEventListener("click", () => {
+    filter = filter === chip.dataset.f ? null : chip.dataset.f;
+    render();
+  });
+});
+
+// Tiempos en vivo sin re-render completo
+setInterval(() => {
+  document.querySelectorAll(".t[data-since]").forEach((t) => {
+    t.textContent = elapsed(t.dataset.since);
+  });
+}, 30000);
+
+// SSE con reconexión
+function connect() {
+  const es = new EventSource("/events");
+  es.onmessage = (e) => {
+    document.body.classList.remove("offline");
+    try {
+      state = JSON.parse(e.data);
+      render();
+    } catch { /* frame corrupto */ }
+  };
+  es.onerror = () => {
+    document.body.classList.add("offline");
+    es.close();
+    setTimeout(connect, 3000);
+  };
+}
+connect();
+</script>
+</body>
+</html>

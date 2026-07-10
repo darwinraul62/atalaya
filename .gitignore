@@ -1,0 +1,5 @@
+node_modules/
+tools/VirtualDesktop*.exe
+tools/VirtualDesktop*.cs
+*.log
+workspaces.json
