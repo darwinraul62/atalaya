@@ -54,7 +54,11 @@ atalaya.cmd -Panel             :: además abre el panel completo
 atalaya.cmd -Status            :: estado de hub y HUD
 atalaya.cmd -Stop              :: detiene todo
 atalaya.cmd -InstallAutostart  :: arrancar con Windows
+atalaya.cmd -Doctor            :: informe de salud (ver Instalación para más)
 ```
+
+(Tras `-Setup`, el comando `atalaya` queda en el PATH: sirve igual desde
+cualquier terminal, sin el `.cmd` ni la ruta.)
 
 - **HUD (píldora)**: un **botón por escritorio** (número; el actual muestra
   además su nombre; ámbar si pide atención) — un clic y estás ahí. Después,
@@ -148,22 +152,43 @@ Requisitos:
 Todo es relativo a la carpeta del repo: clónalo donde quieras, no hay rutas
 fijas. Los instaladores calculan sus rutas a partir de su propia ubicación.
 
+**Con un solo comando** (requiere git; clona a `%LOCALAPPDATA%\Atalaya`,
+configura todo y arranca):
+
+```powershell
+irm https://raw.githubusercontent.com/<usuario>/atalaya/main/setup.ps1 | iex
+```
+
+O desde un clone propio:
+
 ```bat
 git clone <url-del-repo> atalaya
 cd atalaya
-node hooks\install.mjs             :: hooks de Claude Code en Windows (hace backup)
-wsl -e bash hooks/install-wsl.sh   :: hooks de Claude Code en WSL (si aplica)
-copy workspaces.example.json workspaces.json   :: edítalo con tus proyectos
-atalaya.cmd                        :: arrancar hub + HUD
-atalaya.cmd -InstallAutostart      :: opcional: arrancar con Windows
+atalaya.cmd -Setup
 ```
 
-Las sesiones de Claude Code ya abiertas deben **reiniciarse** para tomar los
-hooks. Para desinstalar: `node hooks\install.mjs --uninstall` (igual en WSL).
+El setup verifica los requisitos, compila `tools\VirtualDesktop.exe`, crea
+`workspaces.json` desde el ejemplo, **integra los agentes detectados**
+(Claude Code y Codex, en Windows y en cada distro WSL, con backup de cada
+archivo tocado), agrega el comando `atalaya` al PATH del usuario y deja
+hub + HUD corriendo. Es idempotente: re-ejecutarlo nunca duplica nada.
 
-Qué toca fuera del repo (y nada más): `~/.claude/settings.json` (hooks, con
-backup previo), `%USERPROFILE%\.atalaya\` (estado) y, si usas
-`-InstallAutostart`, un acceso directo en la carpeta Inicio del usuario.
+Comandos de mantenimiento:
+
+```bat
+atalaya -Integrate    :: instalaste un agente DESPUES? re-escanea e integra
+atalaya -Doctor       :: informe de salud: requisitos, procesos, integraciones
+atalaya -Uninstall    :: retira hooks (restaurando lo previo), autostart y PATH
+atalaya -Uninstall -PurgeState  :: lo anterior + borra %USERPROFILE%\.atalaya
+```
+
+Las sesiones de agentes ya abiertas deben **reiniciarse** para tomar los
+hooks.
+
+Qué toca fuera del repo (y nada más): `~/.claude/settings.json` (Windows y
+WSL), `~/.codex/config.toml` (Windows y WSL) — ambos con backup previo —,
+`%USERPROFILE%\.atalaya\` (estado), el PATH del usuario y, si usas
+`-InstallAutostart`, un acceso directo en la carpeta Inicio.
 
 ### Anclar el HUD a todos los escritorios virtuales
 
@@ -178,13 +203,23 @@ Con `tools\VirtualDesktop.exe` presente, el HUD se ancla solo al arrancar
 (también desde su menú contextual). Sin él, ancla manual: **Win+Tab → clic
 derecho sobre el HUD → "Mostrar esta ventana en todos los escritorios"**.
 
-### Codex CLI (opcional)
+### Codex CLI / app de escritorio
 
-En `~/.codex/config.toml`:
+`-Setup` / `-Integrate` lo configuran solos: escriben la clave `notify` de
+`~/.codex/config.toml` (con backup). Codex solo admite **un** programa
+notify; si ya tenías uno (la app de escritorio de Codex instala el suyo), no
+se pierde: queda **encadenado** — Atalaya le reenvía cada evento tal cual — y
+`-Uninstall` lo restaura como estaba.
+
+Configuración manual equivalente, si la prefieres:
 
 ```toml
 notify = ["node", "C:\\ruta\\al\\repo\\atalaya\\hooks\\codex-notify.mjs"]
 ```
+
+(Flags opcionales de `codex-notify.mjs`: `--dir=<ruta>` fija el directorio de
+estado — necesario en WSL — y `--chain=["exe","arg"]` reenvía el evento a tu
+notificador previo.)
 
 Codex solo notifica fin de turno y aprobaciones, así que su tarjeta muestra
 "listo" / "te necesita" (no hay estado "trabajando").

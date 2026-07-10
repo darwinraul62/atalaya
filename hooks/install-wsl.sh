@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Atalaya — instala los hooks de Claude Code dentro de WSL.
+# Atalaya — integra los agentes (Claude Code, Codex) dentro de WSL.
 # Ejecutar DENTRO de WSL (usa el node de WSL, p. ej. el de nvm):
-#   bash /mnt/c/ruta/al/repo/atalaya/hooks/install-wsl.sh
+#   bash /mnt/c/ruta/al/repo/atalaya/hooks/install-wsl.sh [--uninstall|--status|--json]
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -18,4 +18,4 @@ if ! command -v node >/dev/null 2>&1; then
   exit 1
 fi
 
-node "$HERE/install.mjs" "$@"
+node "$HERE/integrate.mjs" "$@"

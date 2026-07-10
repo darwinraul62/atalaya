@@ -1,11 +1,12 @@
 {
   "name": "atalaya",
-  "version": "0.9.1",
+  "version": "0.10.0",
   "private": true,
   "description": "Monitor de sesiones paralelas de agentes (Claude Code / Codex) a través de escritorios virtuales de Windows y WSL",
   "type": "module",
   "scripts": {
     "hub": "node src/hub.js",
+    "integrate": "node hooks/integrate.mjs",
     "install-hooks": "node hooks/install.mjs",
     "uninstall-hooks": "node hooks/install.mjs --uninstall"
   }
