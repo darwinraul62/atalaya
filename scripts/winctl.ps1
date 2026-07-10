@@ -5,6 +5,9 @@
 #                                   VirtualDesktop.exe) y la enfoca; JSON {ok}
 #   -Action show-panel [-Toggle]    trae el panel al escritorio actual o lo lanza;
 #                                   con -Toggle lo minimiza si ya esta al frente
+#   -Action windows                 imprime JSON [{hwnd,pid,proc,title}] de todas
+#                                   las ventanas visibles normales (sin tool
+#                                   windows ni UWP ocultas)
 # Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin BOM.
 param(
     [Parameter(Mandatory = $true)][string]$Action,
@@ -75,6 +78,35 @@ public static class AtalayaWin {
     }
 
     public static void Minimize(long h) { ShowWindow(new IntPtr(h), 6); } // SW_MINIMIZE
+
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int idx);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int attr, out int val, int size);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
+
+    // Ventanas visibles "normales": con titulo, sin WS_EX_TOOLWINDOW y sin
+    // ventanas UWP enjauladas. OJO con DWMWA_CLOAKED: las ventanas de OTROS
+    // escritorios virtuales estan shell-cloaked (bit 2) y hay que conservarlas;
+    // solo se excluye el cloaking de app/heredado (bits 1 y 4).
+    // Una linea por ventana: hwnd \t pid \t titulo
+    public static string ListWindows() {
+        var outp = new StringBuilder();
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            if (!IsWindowVisible(h)) return true;
+            int ex = GetWindowLong(h, -20);          // GWL_EXSTYLE
+            if ((ex & 0x80) != 0) return true;       // WS_EX_TOOLWINDOW
+            int cloaked;
+            if (DwmGetWindowAttribute(h, 14, out cloaked, 4) == 0 && (cloaked & 0x5) != 0) return true;
+            var t = new StringBuilder(512);
+            GetWindowText(h, t, 512);
+            if (t.Length == 0) return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            outp.Append(h.ToInt64()).Append('\t').Append(pid).Append('\t')
+                .Append(t.ToString().Replace('\t', ' ')).Append('\n');
+            return true;
+        }, IntPtr.Zero);
+        return outp.ToString();
+    }
 }
 "@
 
@@ -124,6 +156,28 @@ switch ($Action) {
         if ($vd) { & $vd "/GetCurrentDesktop" "/MoveWindowHandle:$h" | Out-Null }
         [void][AtalayaWin]::Focus($h)
         Write-Output '{"ok":true}'
+    }
+
+    "windows" {
+        $items = New-Object System.Collections.ArrayList
+        $procNames = @{}
+        foreach ($line in ([AtalayaWin]::ListWindows() -split "`n")) {
+            if (-not $line) { continue }
+            $parts = $line -split "`t", 3
+            if ($parts.Count -lt 3) { continue }
+            $procId = [int]$parts[1]
+            if (-not $procNames.ContainsKey($procId)) {
+                $p = Get-Process -Id $procId -ErrorAction SilentlyContinue
+                $procNames[$procId] = if ($p) { $p.ProcessName } else { "?" }
+            }
+            [void]$items.Add(@{
+                hwnd  = [long]$parts[0]
+                pid   = $procId
+                proc  = $procNames[$procId]
+                title = $parts[2]
+            })
+        }
+        ConvertTo-Json -InputObject @($items) -Compress
     }
 
     default {

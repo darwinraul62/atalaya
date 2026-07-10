@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.3.0";
+const VERSION = "0.4.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -198,6 +198,100 @@ function refreshCurrentDesktop() {
   });
 }
 
+// ── Escritorios y ventanas ──────────────────────────────────────────────────
+
+let desktopsCache = null;
+let desktopsAt = 0;
+
+function listDesktops() {
+  return new Promise((resolve) => {
+    if (process.platform !== "win32" || !fs.existsSync(VDESK_EXE)) return resolve(null);
+    if (Date.now() - desktopsAt < 5000 && desktopsCache) return resolve(desktopsCache);
+    execFile(VDESK_EXE, ["/List"], { windowsHide: true, timeout: 5000 }, (err, out) => {
+      const lines = String(out || "").split(/\r?\n/);
+      const start = lines.findIndex((l) => /^-+$/.test(l.trim()));
+      const desks = [];
+      if (start >= 0) {
+        for (let i = start + 1; i < lines.length; i++) {
+          let l = lines[i].trim();
+          if (!l || /^Count of desktops/i.test(l)) break;
+          l = l.replace(/\s*\(Wallpaper:.*$/, "");
+          const current = / \(visible\)$/.test(l);
+          desks.push({ num: desks.length, name: l.replace(/ \(visible\)$/, ""), current });
+        }
+      }
+      if (desks.length) {
+        desktopsCache = desks;
+        desktopsAt = Date.now();
+      }
+      resolve(desks.length ? desks : desktopsCache);
+    });
+  });
+}
+
+let winListCache = null;
+let winListAt = 0;
+
+function listDesktopWindows() {
+  return new Promise((resolve) => {
+    if (process.platform !== "win32") return resolve([]);
+    if (Date.now() - winListAt < 8000 && winListCache) return resolve(winListCache);
+    execFile(
+      "powershell.exe",
+      [...PS_ARGS, WINCTL_PS1, "-Action", "windows"],
+      { windowsHide: true, timeout: 15000 },
+      async (err, stdout) => {
+        let wins = [];
+        try {
+          wins = JSON.parse(String(stdout).trim());
+        } catch {
+          /* sin lista */
+        }
+        if (!Array.isArray(wins)) wins = [];
+        // Las ventanas propias de Atalaya no aportan
+        wins = wins.filter((w) => w.title !== "Atalaya" && w.title !== "Atalaya HUD");
+        await mapWindowsToDesktops(wins);
+        winListCache = wins;
+        winListAt = Date.now();
+        resolve(wins);
+      }
+    );
+  });
+}
+
+// Consulta el escritorio de cada ventana en UNA invocación encadenada.
+// Si un handle falla (ventana cerrada/anclada) la cadena se aborta: se
+// descarta ese elemento y se continúa con el resto de la cola.
+function mapWindowsToDesktops(wins) {
+  return new Promise((resolve) => {
+    if (!fs.existsSync(VDESK_EXE) || !wins.length) return resolve();
+    const queue = wins.slice();
+    const runChunk = () => {
+      if (!queue.length) return resolve();
+      const args = queue.map((w) => `/GetDesktopFromWindowHandle:${w.hwnd}`);
+      execFile(VDESK_EXE, args, { windowsHide: true, timeout: 10000 }, (err, out) => {
+        const lines = String(out || "").split(/\r?\n/).filter((l) => /desktop number/.test(l));
+        for (const line of lines) {
+          if (!queue.length) break;
+          const m = line.match(/desktop number (\d+)(?:\s*\(desktop '([^']*)'\))?/);
+          const w = queue.shift();
+          if (m) {
+            w.desktop = Number(m[1]);
+            w.desktopName = m[2] || null;
+          }
+        }
+        if (queue.length) {
+          queue.shift().desktop = null; // el que abortó la cadena
+          runChunk();
+        } else {
+          resolve();
+        }
+      });
+    };
+    runChunk();
+  });
+}
+
 function jumpToWindow(hwnd, cb) {
   execFile(
     "powershell.exe",
@@ -340,10 +434,45 @@ function buildSummary(payload) {
     ...counts,
     notes: payload.notes.length,
     urgent: urgent
-      ? `${urgent.project}: ${urgent.message || urgent.task || "requiere tu atención"}`
+      ? `${urgent.label || urgent.project}: ${urgent.message || urgent.task || "requiere tu atención"}`
       : null,
     generatedAt: payload.generatedAt,
   };
+}
+
+// Resumen ampliado para el HUD: escritorio actual, total de escritorios y un
+// "vistazo" por escritorio (qué agentes hay y en qué estado) para el tooltip.
+async function buildGlanceSummary() {
+  await refreshCurrentDesktop();
+  const desks = await listDesktops();
+  const payload = buildPayload();
+  const summary = buildSummary(payload);
+  summary.currentDesktop = currentDesktop;
+  summary.desktopCount = desks ? desks.length : null;
+
+  const GLYPH = { needs_you: "🔔", working: "⚙", ready: "✓", idle: "·" };
+  const byDesk = new Map();
+  for (const s of payload.sessions) {
+    const key = s.desktopNum !== null && s.desktopNum !== undefined ? s.desktopNum : -1;
+    if (!byDesk.has(key)) byDesk.set(key, []);
+    byDesk.get(key).push(s);
+  }
+  const brief = (items) =>
+    items.slice(0, 4).map((s) => `${GLYPH[s.status] || "·"} ${s.label || s.project}`).join("   ");
+  const lines = [];
+  const deskList =
+    desks ||
+    [...byDesk.keys()].filter((n) => n >= 0).sort((a, b) => a - b)
+      .map((n) => ({ num: n, name: `Escritorio ${n + 1}` }));
+  for (const d of deskList) {
+    const items = byDesk.get(d.num) || [];
+    const mark = currentDesktop && currentDesktop.num === d.num ? " ◉ aquí" : "";
+    lines.push(`🖥 ${d.name}${mark}${items.length ? " — " + brief(items) : " — sin agentes"}`);
+  }
+  const loose = byDesk.get(-1) || [];
+  if (loose.length) lines.push(`🖥 ? — ${brief(loose)}`);
+  summary.glance = lines;
+  return summary;
 }
 
 // ── Toasts ──────────────────────────────────────────────────────────────────
@@ -481,7 +610,66 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (route === "GET /api/summary") {
-    return json(res, 200, buildSummary(buildPayload()));
+    return json(res, 200, await buildGlanceSummary());
+  }
+
+  if (route === "GET /api/desktops") {
+    await refreshCurrentDesktop();
+    return json(res, 200, { desktops: (await listDesktops()) || [], currentDesktop });
+  }
+
+  if (route === "GET /api/desktops/windows") {
+    const [desktops, windows] = await Promise.all([listDesktops(), listDesktopWindows()]);
+    return json(res, 200, { desktops: desktops || [], windows });
+  }
+
+  if (route === "POST /api/desktops/name") {
+    const body = await readBody(req);
+    const n = Number(body.desktop);
+    const name = String(body.name || "").trim().slice(0, 40);
+    if (!Number.isInteger(n) || n < 0 || !name) {
+      return json(res, 400, { error: "desktop y name requeridos" });
+    }
+    if (!fs.existsSync(VDESK_EXE)) {
+      return json(res, 409, { error: "falta tools\\VirtualDesktop.exe (tools\\get-virtualdesktop.ps1)" });
+    }
+    execFile(
+      VDESK_EXE,
+      [`/GetDesktop:${n}`, `/Name:${name}`],
+      { windowsHide: true, timeout: 5000 },
+      (err, out) => {
+        if (!/Set name of desktop/i.test(String(out || ""))) {
+          return json(res, 502, { error: "no se pudo renombrar el escritorio" });
+        }
+        // Refrescar el nombre en las ventanas ya capturadas y en los cachés
+        const map = loadWindows();
+        let changed = false;
+        for (const w of Object.values(map)) {
+          if (w.desktop === n) {
+            w.desktopName = name;
+            changed = true;
+          }
+        }
+        if (changed) saveWindows(map);
+        desktopsCache = null;
+        currentDesktopAt = 0;
+        winListAt = 0;
+        scheduleBroadcast();
+        json(res, 200, { ok: true });
+      }
+    );
+    return;
+  }
+
+  if (route === "POST /api/windows/focus") {
+    const body = await readBody(req);
+    const hwnd = Number(body.hwnd);
+    if (!Number.isInteger(hwnd) || hwnd <= 0) return json(res, 400, { error: "hwnd inválido" });
+    jumpToWindow(hwnd, (ok) => {
+      if (ok) json(res, 200, { ok: true });
+      else json(res, 502, { error: "no se pudo enfocar (¿ventana cerrada?)" });
+    });
+    return;
   }
 
   if (route === "POST /api/sessions/jump") {

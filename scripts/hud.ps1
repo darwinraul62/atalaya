@@ -80,6 +80,8 @@ $xaml = @"
   <Border x:Name="Pill" CornerRadius="17" Background="#E5171D26"
           BorderBrush="#3A4656" BorderThickness="1" Padding="13,7">
     <StackPanel Orientation="Horizontal">
+      <TextBlock x:Name="TxtDesk" FontSize="12" FontWeight="SemiBold" Foreground="#8FA3B8"
+                 Margin="0,0,11,0" FontFamily="Segoe UI" Visibility="Collapsed"/>
       <TextBlock x:Name="TxtAttn"  FontSize="13" FontWeight="SemiBold" Foreground="#E0A33F" FontFamily="Segoe UI Emoji, Segoe UI"/>
       <TextBlock x:Name="TxtWork"  FontSize="13" FontWeight="SemiBold" Foreground="#5B9CD9" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
       <TextBlock x:Name="TxtReady" FontSize="13" FontWeight="SemiBold" Foreground="#3FB3A8" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
@@ -90,9 +92,14 @@ $xaml = @"
 
 $window   = [Windows.Markup.XamlReader]::Parse($xaml)
 $pill     = $window.FindName("Pill")
+$txtDesk  = $window.FindName("TxtDesk")
 $txtAttn  = $window.FindName("TxtAttn")
 $txtWork  = $window.FindName("TxtWork")
 $txtReady = $window.FindName("TxtReady")
+
+# Tooltip agil: aparece rapido y dura lo suficiente para leer el vistazo
+[System.Windows.Controls.ToolTipService]::SetInitialShowDelay($window, 250)
+[System.Windows.Controls.ToolTipService]::SetShowDuration($window, 60000)
 
 $BgCalm = $pill.Background
 $BrCalm = $pill.BorderBrush
@@ -208,19 +215,36 @@ function Update-Hud {
     $txtWork.Opacity  = if ($s.working -gt 0)   { 1.0 } else { 0.45 }
     $txtReady.Opacity = if ($s.ready -gt 0)     { 1.0 } else { 0.45 }
 
+    # Nombre del escritorio actual en la pastilla (ayuda-memoria al moverse)
+    $deskName = ""
+    if ($s.currentDesktop -and $s.currentDesktop.name) { $deskName = [string]$s.currentDesktop.name }
+    if ($deskName.Length -gt 16) { $deskName = $deskName.Substring(0, 15) + "~" }
+    if ($deskName) {
+        $txtDesk.Text = $deskName
+        $txtDesk.Visibility = "Visible"
+    } else {
+        $txtDesk.Visibility = "Collapsed"
+    }
+
     if ($s.needs_you -gt 0) {
         $pill.Background = $BgAttn; $pill.BorderBrush = $BrAttn
         $window.Opacity = 1.0
-        $window.ToolTip = "Atalaya: $($s.urgent)"
     } elseif ($s.ready -gt 0) {
         $pill.Background = $BgCalm; $pill.BorderBrush = $BrCalm
         $window.Opacity = 0.85
-        $window.ToolTip = "Atalaya: hay trabajo listo para revisar"
     } else {
         $pill.Background = $BgCalm; $pill.BorderBrush = $BrCalm
         $window.Opacity = 0.6
-        $window.ToolTip = "Atalaya: todo en orden"
     }
+
+    # Tooltip: vistazo por escritorio sin abrir el panel
+    $lines = New-Object System.Collections.ArrayList
+    $head = "Atalaya"
+    if ($s.desktopCount) { $head = "Atalaya - $($s.desktopCount) escritorios" }
+    [void]$lines.Add($head)
+    if ($s.glance) { foreach ($g in $s.glance) { [void]$lines.Add([string]$g) } }
+    if ($s.urgent) { [void]$lines.Add(""); [void]$lines.Add("Atiende: $($s.urgent)") }
+    $window.ToolTip = ($lines -join [Environment]::NewLine)
 }
 
 # ---- Eventos ----------------------------------------------------------------

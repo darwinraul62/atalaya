@@ -56,16 +56,26 @@ atalaya.cmd -Stop              :: detiene todo
 atalaya.cmd -InstallAutostart  :: arrancar con Windows
 ```
 
-- **HUD**: doble clic = abrir panel · arrastrar = mover · clic derecho = menú.
+- **HUD**: muestra el **nombre del escritorio actual** (tu ayuda-memoria al
+  moverte entre escritorios) y los contadores 🔔/⚙/✓. Al **pasar el mouse**,
+  un vistazo por escritorio: qué agentes hay en cada uno y su estado, sin
+  abrir el panel. Doble clic = abrir panel · arrastrar = mover · clic
+  derecho = menú.
 - **Panel**:
   - Secciones por **escritorio virtual**; la cabecera `🖥 <nombre>` es un botón
     que cambia a ese escritorio; tu escritorio actual se marca con `◉ aquí`.
+  - **✏ en la cabecera**: renombra el escritorio — cambia el nombre **real**
+    del escritorio de Windows (visible también en Win+Tab y en el HUD). Úsalo
+    como etiqueta de contexto: "API clientes", "Lectura", etc.
   - **↗ Ir** (o **doble clic** en la tarjeta): salta a esa sesión.
-  - **✏** junto al nombre: etiqueta personalizada del clone ("qué estamos
-    haciendo aquí"). Persiste por carpeta entre sesiones; vacío restaura el
-    nombre de la carpeta, que es el valor por defecto.
-  - Chips superiores filtran por estado; caja de "Notas" para pendientes
-    manuales.
+  - **✏** junto al nombre de la tarjeta: etiqueta personalizada del clone
+    ("qué estamos haciendo aquí"). Persiste por carpeta entre sesiones; vacío
+    restaura el nombre de la carpeta, que es el valor por defecto.
+  - Chip **🖥 Ventanas**: vista alternativa que muestra además las demás
+    ventanas de cada escritorio (Teams, SSMS, navegador…) como filas
+    compactas; clic en una fila la enfoca. La preferencia se recuerda. Por
+    defecto el panel se mantiene enfocado solo en agentes.
+  - Chips de estado filtran; caja de "Notas" para pendientes manuales.
 - **Hotkeys globales** (funcionan desde cualquier app mientras el HUD corre):
 
   | Atajo (por defecto) | Acción |

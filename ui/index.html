@@ -65,6 +65,15 @@
   .desktop-h .count { margin-left: auto; font-family: var(--mono); font-size: 11px; color: var(--ink-3); white-space: nowrap; }
   .here-tag { font: 600 11px var(--ui); color: var(--chrome); white-space: nowrap; }
   .desktop.here { border-color: var(--chrome); }
+  .winrow {
+    display: flex; align-items: baseline; gap: 7px; padding: 4px 9px;
+    background: var(--panel); border: 1px dashed var(--line); border-radius: 6px;
+    font-size: 12px; color: var(--ink-2); cursor: pointer; overflow: hidden;
+  }
+  .winrow:hover { border-color: var(--chrome); }
+  .winrow .wproc { font-family: var(--mono); font-size: 10.5px; color: var(--ink-3); white-space: nowrap; }
+  .winrow .wtitle { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .more { font-size: 11px; color: var(--ink-3); padding: 0 4px; }
 
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 11px 13px; box-shadow: var(--shadow); display: flex; flex-direction: column; gap: 7px; }
   .card[data-status="needs_you"] { border-color: color-mix(in srgb, var(--attn) 55%, var(--line)); }
@@ -126,6 +135,8 @@
     <div class="brand"><strong>Atalaya</strong><span>monitor de sesiones</span></div>
     <span id="offline">⚠ sin conexión con el hub — reintentando…</span>
     <div class="chips" role="group" aria-label="Filtrar por estado" id="chips">
+      <button class="chip" id="viewToggle" aria-pressed="false"
+        title="Mostrar también las demás ventanas de cada escritorio">🖥 Ventanas</button>
       <button class="chip attn" data-f="needs_you" aria-pressed="false">🔔 Te necesita <span class="n">0</span></button>
       <button class="chip work" data-f="working" aria-pressed="false">⚙ Trabajando <span class="n">0</span></button>
       <button class="chip ready" data-f="ready" aria-pressed="false">✓ Listo <span class="n">0</span></button>
@@ -144,7 +155,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.3.0";
+const UI_VERSION = "0.4.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -156,6 +167,20 @@ const ORDER = ["needs_you", "ready", "working", "idle"];
 
 let state = { sessions: [], notes: [], workspaceOrder: [], generatedAt: null };
 let filter = null;
+
+// Vista "Ventanas": además de los agentes, las demás ventanas por escritorio
+let viewAll = localStorage.getItem("atalayaViewAll") === "1";
+let deskInfo = null; // { desktops: [{num,name,current}], windows: [{hwnd,proc,title,desktop}] }
+
+async function fetchDeskInfo() {
+  try {
+    const r = await fetch("/api/desktops/windows");
+    deskInfo = await r.json();
+  } catch {
+    deskInfo = null;
+  }
+  render();
+}
 
 function el(tag, cls, text) {
   const n = document.createElement(tag);
@@ -302,19 +327,34 @@ function noteCard(n) {
 
 // Agrupa por escritorio virtual detectado; las sesiones aún sin ventana
 // registrada (sin prompt desde que arrancó el hub) van a un grupo aparte.
+// En vista "Ventanas" se incluyen todos los escritorios (aun sin agentes)
+// y las demás ventanas de cada uno.
 function groupSessions() {
   const groups = new Map();
-  for (const s of state.sessions) {
-    const known = s.desktopNum !== null && s.desktopNum !== undefined;
-    const key = known ? "d" + s.desktopNum : "none";
+  const addGroup = (num, name) => {
+    const key = num !== null ? "d" + num : "none";
     if (!groups.has(key)) {
       groups.set(key, {
-        num: known ? s.desktopNum : null,
-        name: known ? s.desktopName || "Escritorio " + (s.desktopNum + 1) : null,
+        num,
+        name: num !== null ? name || "Escritorio " + (num + 1) : null,
         items: [],
+        windows: [],
       });
     }
-    groups.get(key).items.push(s);
+    return groups.get(key);
+  };
+  for (const s of state.sessions) {
+    const known = s.desktopNum !== null && s.desktopNum !== undefined;
+    addGroup(known ? s.desktopNum : null, known ? s.desktopName : null).items.push(s);
+  }
+  if (viewAll && deskInfo) {
+    for (const d of deskInfo.desktops || []) addGroup(d.num, d.name);
+    const sessionHwnds = new Set(state.sessions.map((s) => s.hwnd).filter(Boolean));
+    for (const w of deskInfo.windows || []) {
+      if (w.desktop === null || w.desktop === undefined) continue;
+      if (sessionHwnds.has(w.hwnd)) continue; // ya representada por su tarjeta
+      addGroup(w.desktop, w.desktopName).windows.push(w);
+    }
   }
   const ordered = [...groups.values()].sort((a, b) => {
     if (a.num === null) return 1;
@@ -346,6 +386,28 @@ function render() {
       key.title = "Cambiar a este escritorio";
       key.addEventListener("click", () => postJson("/api/desktops/switch", { desktop: g.num }));
       h.append(key);
+      // Renombrar el escritorio (cambia el nombre REAL del escritorio de Windows)
+      const rename = el("button", "edit", "✏");
+      rename.title = "Renombrar este escritorio (se refleja en Windows, Win+Tab incluido)";
+      rename.addEventListener("click", () => {
+        const input = el("input", "label-edit");
+        input.value = g.name;
+        input.maxLength = 40;
+        key.replaceWith(input);
+        rename.style.display = "none";
+        input.focus();
+        input.select();
+        let done = false;
+        input.addEventListener("keydown", async (e) => {
+          if (e.key === "Enter" && input.value.trim()) {
+            done = true;
+            await postJson("/api/desktops/name", { desktop: g.num, name: input.value.trim() });
+            if (viewAll) fetchDeskInfo();
+          } else if (e.key === "Escape") { done = true; render(); }
+        });
+        input.addEventListener("blur", () => { if (!done) { done = true; render(); } });
+      });
+      h.append(rename);
       h.append(el("h2", null, g.context || ""));
       if (here && here.num === g.num) {
         sec.classList.add("here");
@@ -357,9 +419,23 @@ function render() {
       h.append(key);
       h.append(el("h2", null, g.context || "Sin escritorio detectado"));
     }
-    h.append(el("span", "count", g.items.length + (g.items.length === 1 ? " sesión" : " sesiones")));
+    const parts = [];
+    if (g.items.length) parts.push(g.items.length + (g.items.length === 1 ? " sesión" : " sesiones"));
+    if (viewAll && g.windows.length) parts.push(g.windows.length + " ventanas");
+    h.append(el("span", "count", parts.join(" · ") || "vacío"));
     sec.append(h);
     for (const s of g.items) sec.append(sessionCard(s));
+    if (viewAll) {
+      for (const w of g.windows.slice(0, 8)) {
+        const row = el("div", "winrow");
+        row.append(el("span", "wproc", w.proc));
+        row.append(el("span", "wtitle", w.title));
+        row.title = "Clic: enfocar esta ventana";
+        row.addEventListener("click", () => postJson("/api/windows/focus", { hwnd: w.hwnd }));
+        sec.append(row);
+      }
+      if (g.windows.length > 8) sec.append(el("div", "more", "+" + (g.windows.length - 8) + " ventanas más"));
+    }
     board.append(sec);
   }
 
@@ -401,7 +477,7 @@ function render() {
   // Chips
   const counts = { needs_you: 0, working: 0, ready: 0, idle: 0 };
   for (const s of state.sessions) if (counts[s.status] !== undefined) counts[s.status]++;
-  document.querySelectorAll("#chips .chip").forEach((chip) => {
+  document.querySelectorAll("#chips .chip[data-f]").forEach((chip) => {
     chip.querySelector(".n").textContent = counts[chip.dataset.f];
     chip.setAttribute("aria-pressed", String(chip.dataset.f === filter));
   });
@@ -410,12 +486,27 @@ function render() {
     "actualizado " + new Date(state.generatedAt || Date.now()).toLocaleTimeString();
 }
 
-document.querySelectorAll("#chips .chip").forEach((chip) => {
+document.querySelectorAll("#chips .chip[data-f]").forEach((chip) => {
   chip.addEventListener("click", () => {
     filter = filter === chip.dataset.f ? null : chip.dataset.f;
     render();
   });
 });
+
+const viewToggle = document.getElementById("viewToggle");
+function syncViewToggle() {
+  viewToggle.setAttribute("aria-pressed", String(viewAll));
+}
+viewToggle.addEventListener("click", () => {
+  viewAll = !viewAll;
+  localStorage.setItem("atalayaViewAll", viewAll ? "1" : "0");
+  syncViewToggle();
+  if (viewAll) fetchDeskInfo();
+  else render();
+});
+syncViewToggle();
+if (viewAll) fetchDeskInfo();
+setInterval(() => { if (viewAll) fetchDeskInfo(); }, 20000);
 
 // Tiempos en vivo sin re-render completo
 setInterval(() => {
@@ -432,6 +523,7 @@ window.addEventListener("focus", async () => {
     state = await r.json();
     render();
   } catch { /* SSE sigue mandando */ }
+  if (viewAll) fetchDeskInfo();
 });
 
 // SSE con reconexión
