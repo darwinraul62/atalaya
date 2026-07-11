@@ -4,14 +4,13 @@
 #   1) Desde un clone del repo:   powershell -ExecutionPolicy Bypass -File setup.ps1
 #      (equivale a: atalaya.cmd -Setup)
 #   2) Sin clonar nada (one-liner; requiere git):
-#      irm https://raw.githubusercontent.com/<usuario>/atalaya/main/setup.ps1 | iex
+#      irm https://raw.githubusercontent.com/darwinraul62/atalaya/main/setup.ps1 | iex
 #      Clona/actualiza el repo en %LOCALAPPDATA%\Atalaya y corre el setup.
 #      La URL del repo se puede fijar con la variable de entorno ATALAYA_REPO.
 
 $ErrorActionPreference = "Stop"
 
-# TODO(publicacion): fijar aqui la URL definitiva al crear el repo remoto.
-$DefaultRepoUrl = "https://github.com/CAMBIAME/atalaya.git"
+$DefaultRepoUrl = "https://github.com/darwinraul62/atalaya.git"
 
 function Invoke-LocalSetup([string]$repoRoot) {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $repoRoot "atalaya.ps1") -Setup

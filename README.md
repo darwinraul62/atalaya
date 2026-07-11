@@ -156,7 +156,7 @@ fijas. Los instaladores calculan sus rutas a partir de su propia ubicación.
 configura todo y arranca):
 
 ```powershell
-irm https://raw.githubusercontent.com/<usuario>/atalaya/main/setup.ps1 | iex
+irm https://raw.githubusercontent.com/darwinraul62/atalaya/main/setup.ps1 | iex
 ```
 
 O desde un clone propio:
