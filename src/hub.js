@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.9.1";
+const VERSION = "0.11.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -812,7 +812,7 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.pill.maxPins !== undefined) {
         const n = Number(body.pill.maxPins);
-        cfg.pill.maxPins = Number.isInteger(n) && n >= 0 && n <= 9 ? n : 3;
+        cfg.pill.maxPins = Number.isInteger(n) && n >= 0 && n <= 9 ? n : 0;
       }
     }
     try {
@@ -928,6 +928,57 @@ const server = http.createServer(async (req, res) => {
     savePins(pins);
     scheduleBroadcast();
     return json(res, 200, { ok: true });
+  }
+
+  // Fijar/quitar favorita la sesión de la ventana ACTIVA (hotkey del HUD):
+  // marca favoritos sin abrir el panel. El hotkey no roba el foco, así que el
+  // primer plano sigue siendo la terminal del usuario; hwnd → sesión vía
+  // windows.json. Si varias sesiones comparten la ventana (pestañas de una
+  // misma terminal), gana la de captura más reciente.
+  if (route === "POST /api/sessions/pin-foreground") {
+    if (process.platform !== "win32") return json(res, 409, { error: "solo Windows" });
+    execFile(
+      "powershell.exe",
+      [...PS_ARGS, WINCTL_PS1, "-Action", "foreground"],
+      { windowsHide: true, timeout: 8000 },
+      (err, stdout) => {
+        let info = null;
+        try {
+          info = JSON.parse(String(stdout).trim());
+        } catch {
+          /* sin ventana */
+        }
+        if (err || !info || !info.hwnd) {
+          showToast("Atalaya", "No se pudo leer la ventana activa.");
+          return json(res, 502, { error: "no se pudo capturar el primer plano" });
+        }
+        const windows = loadWindows();
+        const sessions = buildPayload().sessions;
+        const target = sessions
+          .filter((s) => windows[s.sessionId] && Number(windows[s.sessionId].hwnd) === Number(info.hwnd))
+          .sort((a, b) =>
+            String(windows[b.sessionId].capturedAt || "").localeCompare(
+              String(windows[a.sessionId].capturedAt || "")
+            )
+          )[0];
+        if (!target) {
+          showToast(
+            "Atalaya: sin sesión aquí",
+            "La ventana activa no tiene sesión de agente registrada (envía un prompt primero)."
+          );
+          return json(res, 404, { error: "sin sesión para esa ventana" });
+        }
+        const pinned = !target.starred;
+        const pins = loadPins().filter((p) => p !== target.sessionId);
+        if (pinned) pins.push(target.sessionId);
+        savePins(pins);
+        scheduleBroadcast();
+        const who = target.label || target.project;
+        showToast("Atalaya", pinned ? `★ Favorita: ${who}` : `☆ Quitada de favoritas: ${who}`);
+        return json(res, 200, { ok: true, pinned, sessionId: target.sessionId });
+      }
+    );
+    return;
   }
 
   if (route === "POST /api/sessions/label") {

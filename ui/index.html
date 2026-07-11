@@ -224,6 +224,7 @@
       <label>Escritorio anterior <input data-hk="prevDesktop" placeholder="Ctrl+Alt+Left"></label>
       <label>Escritorio nuevo <input data-hk="newDesktop" placeholder="none"></label>
       <label>Fijar/soltar deck <input data-hk="toggleDeck" placeholder="none"></label>
+      <label>★ Favorito de la ventana activa <input data-hk="pinSession" placeholder="Ctrl+Alt+S"></label>
       <label>Esquina de la píldora
         <select id="setCorner">
           <option value="">libre (recordar arrastre)</option>
@@ -235,10 +236,10 @@
       </label>
       <label>Máx. ★ favoritos en la píldora
         <select id="setMaxPins">
-          <option value="0">0 (solo en el deck)</option>
+          <option value="0" selected>0 (solo en el deck)</option>
           <option value="1">1</option>
           <option value="2">2</option>
-          <option value="3" selected>3</option>
+          <option value="3">3</option>
           <option value="4">4</option>
           <option value="5">5</option>
         </select>
@@ -262,7 +263,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.9.1";
+const UI_VERSION = "0.11.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -375,11 +376,13 @@ function sessionCard(s) {
   if (s.host === "wsl") top.append(el("span", "host", "WSL"));
   top.append(el("span", "agent", s.agent || "agente"));
 
-  // Importante (estrella): la sesión aparece en la píldora y en el deck
+  // Importante (estrella): la sesión aparece en la vista ★ del deck (y en la
+  // píldora si pill.maxPins > 0). También sin abrir el panel: hotkey
+  // Ctrl+Alt+S sobre la ventana del agente.
   const star = el("button", "star" + (s.starred ? " on" : ""), s.starred ? "★" : "☆");
   star.title = s.starred
     ? "Quitar de importantes"
-    : "Marcar como importante: acceso de un clic desde la píldora y el deck";
+    : "Marcar como importante: acceso de un clic desde el deck (también con Ctrl+Alt+S en la ventana)";
   star.addEventListener("click", () =>
     postJson("/api/sessions/pin", { sessionId: s.sessionId, pinned: !s.starred })
   );
@@ -728,7 +731,7 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
     });
     document.getElementById("setCorner").value = (cfg.pill && cfg.pill.corner) || "";
     document.getElementById("setMaxPins").value =
-      cfg.pill && cfg.pill.maxPins !== undefined ? String(cfg.pill.maxPins) : "3";
+      cfg.pill && cfg.pill.maxPins !== undefined ? String(cfg.pill.maxPins) : "0";
   } catch { /* hub caído: se queda vacío */ }
   syncPrefUI();
   settingsEl.showModal();

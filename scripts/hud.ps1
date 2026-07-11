@@ -4,7 +4,8 @@
 # - Doble clic abre el panel completo; clic derecho abre el menu
 # - Si existe tools\VirtualDesktop*.exe intenta anclarse a todos los escritorios
 # - Hotkeys globales: Ctrl+Alt+A muestra/oculta el panel (modo quake),
-#   Ctrl+Alt+J salta a la sesion mas urgente
+#   Ctrl+Alt+J salta a la sesion mas urgente, Ctrl+Alt+S fija/quita como
+#   favorita la sesion de la ventana activa
 # Ejecutar con powershell.exe (STA por defecto). Solo caracteres ASCII en este
 # archivo: PowerShell 5.1 no lee bien UTF-8 sin BOM.
 
@@ -35,9 +36,10 @@ $Hotkeys = @{
     prevDesktop = "Ctrl+Alt+Left"
     newDesktop  = "none"
     toggleDeck  = "none"
+    pinSession  = "Ctrl+Alt+S"
 }
 $PillCorner = ""
-$MaxPins = 3
+$MaxPins = 0
 try {
     $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
     foreach ($k in @($Hotkeys.Keys)) {
@@ -251,6 +253,13 @@ function Jump-Urgent {
     [void](Invoke-HubPost "/api/sessions/jump" '{"urgent":true}')
 }
 
+function Pin-ForegroundSession {
+    # Fija/quita como favorita la sesion de la ventana ACTIVA sin abrir el
+    # panel: el hub captura el primer plano (el hotkey no roba el foco),
+    # resuelve hwnd -> sesion y confirma con un toast.
+    [void](Invoke-HubPost "/api/sessions/pin-foreground" '{}')
+}
+
 function Pin-WindowToAllDesktops([System.Windows.Window]$win, [string]$name) {
     $exe = Get-ChildItem -Path (Join-Path $RepoRoot "tools") -Filter "VirtualDesktop*.exe" |
         Select-Object -First 1
@@ -311,8 +320,9 @@ function Update-Hud {
     $txtWork.Opacity  = if ($s.working -gt 0)   { 1.0 } else { 0.45 }
     $txtReady.Opacity = if ($s.ready -gt 0)     { 1.0 } else { 0.45 }
 
-    # Botones por escritorio en la pastilla: numero (y nombre en el actual);
-    # un clic = ir a ese escritorio. Ambar si ese escritorio pide atencion.
+    # Botones por escritorio en la pastilla: numero y nombre en TODOS (mas
+    # facil orientarse); el actual se marca con el circulo relleno + fondo, y
+    # el que pide atencion en ambar con campana (glifo ademas de color).
     $deskBtns.Children.Clear()
     if ($s.deck) {
         foreach ($d in $s.deck) {
@@ -327,10 +337,12 @@ function Update-Hud {
             $b.BorderBrush = if ($urgent) { $ColAttn } elseif ($isCur) { $ColChrome } else { $ColInk3 }
             $shortName = [string]$d.name
             if ($shortName.Length -gt 9) { $shortName = $shortName.Substring(0, 8) + "~" }
-            $txt = if ($isCur) { "$($d.num + 1) $shortName" } else { "$($d.num + 1)" }
+            $txt = "$($d.num + 1) $shortName"
+            if ($isCur)  { $txt = "$GlyphHere $txt" }
+            if ($urgent) { $txt = "$GlyphBell $txt" }
             $tb = New-Object Windows.Controls.TextBlock
             $tb.Text = $txt; $tb.FontSize = 11.5
-            $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI")
+            $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Emoji, Segoe UI")
             $tb.Foreground = if ($urgent) { $ColAttn } elseif ($isCur) { $ColInk } else { $ColInk2 }
             if ($isCur -or $urgent) { $tb.FontWeight = "SemiBold" }
             $b.Child = $tb
@@ -346,8 +358,8 @@ function Update-Hud {
     }
 
     # Sesiones pineadas (estrella): acceso de un clic a puntos importantes.
-    # Tope configurable (pill.maxPins, defecto 3) priorizando las urgentes;
-    # la vista [estrella] del deck siempre muestra todas.
+    # Ocultas por defecto en la pastilla (pill.maxPins, defecto 0: viven en la
+    # vista [estrella] del deck); si se activan, priorizan las urgentes.
     $pinBtns.Children.Clear()
     if ($s.pinned -and $MaxPins -gt 0) {
         $pinList = @($s.pinned | Sort-Object { if ($_.status -eq "needs_you") { 0 } else { 1 } })
@@ -366,7 +378,7 @@ function Update-Hud {
             $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Emoji, Segoe UI")
             $tb.Foreground = if ($urgent) { $ColAttn } else { $ColInk2 }
             $b.Child = $tb
-            $b.ToolTip = "$($p.label): ir a esta sesion (pineada desde el panel)"
+            $b.ToolTip = "$($p.label): ir a esta sesion favorita"
             $b.Tag = [string]$p.sessionId
             $b.Add_MouseLeftButtonDown({
                 param($src, $e)
@@ -496,7 +508,7 @@ function Update-Deck($s) {
     $swDesks.Add_MouseLeftButtonUp({ Set-DeckView "desks" })
     $swPins = New-DeckText "[$GlyphStar]" $(if ($onPins) { $ColChrome } else { $ColInk3 }) 11 0 $onPins
     $swPins.Cursor = "Hand"; $swPins.Margin = "7,0,0,0"
-    $swPins.ToolTip = "Vista de importantes (sesiones pineadas desde el panel)"
+    $swPins.ToolTip = "Vista de importantes (favoritos: $($Hotkeys.pinSession) en la ventana o estrella del panel)"
     $swPins.Add_MouseLeftButtonUp({ Set-DeckView "pins" })
 
     $pinText = if ($script:DeckPinned) { "$GlyphPin fijado" } else { "$GlyphPin fijar" }
@@ -539,7 +551,7 @@ function Update-Deck($s) {
     if ($onPins) {
         # Vista de importantes: una fila por sesion pineada
         if (-not $s.pinned -or @($s.pinned).Count -eq 0) {
-            [void]$deckStack.Children.Add((New-DeckText "Sin importantes: usa la estrella en las tarjetas del panel" $ColInk3 11.5 0 $false))
+            [void]$deckStack.Children.Add((New-DeckText "Sin importantes: $($Hotkeys.pinSession) en la ventana del agente, o la estrella del panel" $ColInk3 11.5 0 $false))
             return
         }
         $glyphMap = @{ needs_you = $GlyphBell; working = $GlyphGear; ready = $GlyphCheck; idle = "-" }
@@ -719,6 +731,7 @@ $HotkeyHook = {
             4 { Go-PrevDesktop }
             5 { New-VirtualDesktop }
             6 { Toggle-DeckPin }
+            7 { Pin-ForegroundSession }
         }
         $handled.Value = $true
     }
@@ -736,7 +749,8 @@ function Register-Hotkeys {
             @{ Id = 3; Spec = $Hotkeys.nextDesktop; Name = "escritorio siguiente" },
             @{ Id = 4; Spec = $Hotkeys.prevDesktop; Name = "escritorio anterior" },
             @{ Id = 5; Spec = $Hotkeys.newDesktop;  Name = "escritorio nuevo" },
-            @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "fijar/soltar deck" }
+            @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "fijar/soltar deck" },
+            @{ Id = 7; Spec = $Hotkeys.pinSession;  Name = "favorito de la ventana activa" }
         )
         foreach ($hk in $wanted) {
             $parsed = ConvertTo-Hotkey $hk.Spec
@@ -777,7 +791,7 @@ $window.Add_Closed({
     Save-Position
     try {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
-        foreach ($hkId in 1..6) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
+        foreach ($hkId in 1..7) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
     } catch { }
     try { Remove-Item (Join-Path $StateDir "hud.pid") -Force } catch { }
 })

@@ -60,11 +60,12 @@ atalaya.cmd -Doctor            :: informe de salud (ver Instalación para más)
 (Tras `-Setup`, el comando `atalaya` queda en el PATH: sirve igual desde
 cualquier terminal, sin el `.cmd` ni la ruta.)
 
-- **HUD (píldora)**: un **botón por escritorio** (número; el actual muestra
-  además su nombre; ámbar si pide atención) — un clic y estás ahí. Después,
-  las **sesiones importantes** (★, marcadas desde el panel) con salto de un
-  clic; se muestran como máximo 3 (configurable en Ajustes, prioridad a las
-  que piden atención; el deck siempre lista todas). Los contadores 🔔/⚙/✓ también son botones: clic = ir a la sesión que
+- **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
+  clic y estás ahí. El actual se marca con ◉ (y fondo resaltado); el que pide
+  atención va en ámbar con 🔔. Opcionalmente puede mostrar también las
+  **sesiones importantes** (★) con salto de un clic: por defecto viven solo en
+  el deck (`Máx. ★ favoritos en la píldora` en Ajustes, `0` = ocultas,
+  prioridad a las que piden atención). Los contadores 🔔/⚙/✓ también son botones: clic = ir a la sesión que
   **más tiempo lleva** en ese estado (enfoca su ventana; si no puede, cambia
   a su escritorio). El 📡 abre Atalaya en **máximo foco**: maximizada y
   enfocada en el monitor donde la dejaste. Doble clic = abrir panel ·
@@ -91,9 +92,11 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   - **✏** junto al nombre de la tarjeta: etiqueta personalizada del clone
     ("qué estamos haciendo aquí"). Persiste por carpeta entre sesiones; vacío
     restaura el nombre de la carpeta, que es el valor por defecto.
-  - **☆/★** en la tarjeta: marcar la sesión como **importante** — aparece como
-    botón en la píldora y en la vista ★ del deck para volver a ella con un
-    clic (puntos que quieres verificar seguido).
+  - **☆/★** en la tarjeta: marcar la sesión como **importante** — aparece en
+    la vista ★ del deck (y en la píldora si lo activas en Ajustes) para volver
+    a ella con un clic (puntos que quieres verificar seguido). Más rápido aún:
+    `Ctrl+Alt+S` con la ventana del agente en primer plano fija/quita el
+    favorito sin abrir el panel (confirma con un toast).
   - Chip **🖥 Ventanas**: vista alternativa que muestra además las demás
     ventanas de cada escritorio (Teams, SSMS, navegador…) como filas
     compactas **con el icono real del programa**; clic en una fila la enfoca.
@@ -111,6 +114,7 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+J` | Saltar a la sesión más urgente (la que lleva más tiempo esperándote) |
   | `Ctrl+Alt+Right` | Escritorio siguiente (con vuelta al llegar al final) |
   | `Ctrl+Alt+Left` | Escritorio anterior (con vuelta) |
+  | `Ctrl+Alt+S` | Fijar/quitar como favorita (★) la sesión de la ventana activa |
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Fijar/soltar el deck |
 

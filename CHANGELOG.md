@@ -4,6 +4,22 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.11.0] - 2026-07-11
+
+### Añadido
+- Hotkey global `Ctrl+Alt+S` (configurable: `pinSession`): fija/quita como
+  **favorita** (★) la sesión de la ventana activa, sin abrir el panel. Nuevo
+  endpoint `POST /api/sessions/pin-foreground` (captura el primer plano,
+  resuelve ventana → sesión y confirma con toast).
+
+### Cambiado
+- Píldora: los botones de escritorio muestran **número y nombre en todos**
+  los escritorios (antes solo el actual). El actual se marca con ◉ y fondo;
+  el que pide atención, en ámbar y con 🔔 (glifo además de color).
+- Favoritos en la píldora **ocultos por defecto** (`pill.maxPins` pasa de 3 a
+  0): viven en la vista ★ del deck y se reactivan en Ajustes si se quieren
+  también en la píldora.
+
 ## [0.10.0] - 2026-07-10
 
 ### Añadido

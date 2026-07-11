@@ -261,7 +261,8 @@ $cfgFile = Join-Path $StateDir "config.json"
 if (-not (Test-Path $cfgFile)) {
     $defaultCfg = '{ "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J", ' +
         '"nextDesktop": "Ctrl+Alt+Right", "prevDesktop": "Ctrl+Alt+Left", ' +
-        '"newDesktop": "none", "toggleDeck": "none" }, "pill": { "corner": "" } }'
+        '"newDesktop": "none", "toggleDeck": "none", "pinSession": "Ctrl+Alt+S" }, ' +
+        '"pill": { "corner": "", "maxPins": 0 } }'
     Set-Content -Path $cfgFile -Value $defaultCfg
     Write-Host "Creado $cfgFile (hotkeys y pildora configurables; 'none' desactiva)."
 }
