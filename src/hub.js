@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.11.0";
+const VERSION = "0.12.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -198,6 +198,47 @@ function savePins(arr) {
     fs.writeFileSync(PINS_FILE, JSON.stringify(arr, null, 2));
   } catch (e) {
     log(`pins.json error: ${e.message}`);
+  }
+}
+
+// ── Alertas atendidas ───────────────────────────────────────────────────────
+// El HUD reporta la ventana en primer plano (POST /api/foreground). Si el
+// usuario permanece unos segundos en la ventana de una sesión que estaba en
+// needs_you/ready, esa alerta se da por LEÍDA: la sesión pasa a "idle" con la
+// marca attended (hasta que un evento nuevo cambie su statusSince). Así la
+// campana no se queda encendida después de visitar la terminal.
+
+const ACK_DWELL_MS = 4000; // permanencia mínima para dar una alerta por vista
+let fgHwnd = null;
+let fgSince = 0;
+const acks = new Map(); // sessionId → statusSince que ya fue atendido
+
+function ackSessionsOnHwnd(hwnd) {
+  if (!hwnd) return false;
+  const windows = loadWindows();
+  let changed = false;
+  for (const [id, w] of Object.entries(windows)) {
+    if (Number(w.hwnd) !== Number(hwnd)) continue;
+    try {
+      const s = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, `${id}.json`), "utf8"));
+      if (
+        (s.status === "needs_you" || s.status === "ready") &&
+        s.statusSince &&
+        acks.get(id) !== s.statusSince
+      ) {
+        acks.set(id, s.statusSince);
+        changed = true;
+      }
+    } catch {
+      /* ficha ausente */
+    }
+  }
+  return changed;
+}
+
+function checkForegroundAck() {
+  if (fgHwnd && Date.now() - fgSince >= ACK_DWELL_MS) {
+    if (ackSessionsOnHwnd(fgHwnd)) scheduleBroadcast();
   }
 }
 
@@ -380,6 +421,15 @@ function loadSessions() {
       s.desktopName = w ? w.desktopName || null : null;
       s.label = labels[normPath(s.cwd)] || null;
       s.starred = pins.has(s.sessionId);
+      // Alerta ya atendida (el usuario visitó la ventana): se muestra como
+      // "visto" y deja de contar como pendiente hasta un evento nuevo
+      if (
+        (s.status === "needs_you" || s.status === "ready") &&
+        acks.get(s.sessionId) === s.statusSince
+      ) {
+        s.attended = true;
+        s.status = "idle";
+      }
       sessions.push(s);
     } catch {
       /* ficha corrupta o a medio escribir: se ignora */
@@ -487,6 +537,7 @@ function buildSummary(payload) {
 // "deck" — una entrada estructurada por escritorio para el mini-panel de la
 // píldora (agentes por estado, ventana más relevante, nº de ventanas).
 async function buildGlanceSummary() {
+  checkForegroundAck(); // el HUD consulta cada pocos segundos: buen momento
   await refreshCurrentDesktop();
   const desks = await listDesktops();
   const payload = buildPayload();
@@ -814,6 +865,27 @@ const server = http.createServer(async (req, res) => {
         const n = Number(body.pill.maxPins);
         cfg.pill.maxPins = Number.isInteger(n) && n >= 0 && n <= 9 ? n : 0;
       }
+      if (body.pill.dim !== undefined) {
+        cfg.pill.dim = String(body.pill.dim) === "never" ? "never" : "idle";
+      }
+      if (body.pill.layout !== undefined) {
+        cfg.pill.layout = String(body.pill.layout) === "v" ? "v" : "h";
+      }
+      if (body.pill.taskbar !== undefined) {
+        cfg.pill.taskbar = !!body.pill.taskbar;
+      }
+    }
+    if (body.pomodoro && typeof body.pomodoro === "object") {
+      cfg.pomodoro = { ...cfg.pomodoro };
+      if (body.pomodoro.enabled !== undefined) cfg.pomodoro.enabled = !!body.pomodoro.enabled;
+      if (body.pomodoro.workMin !== undefined) {
+        const n = Number(body.pomodoro.workMin);
+        cfg.pomodoro.workMin = Number.isInteger(n) && n >= 5 && n <= 120 ? n : 25;
+      }
+      if (body.pomodoro.breakMin !== undefined) {
+        const n = Number(body.pomodoro.breakMin);
+        cfg.pomodoro.breakMin = Number.isInteger(n) && n >= 1 && n <= 60 ? n : 5;
+      }
     }
     try {
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
@@ -847,6 +919,34 @@ const server = http.createServer(async (req, res) => {
     } catch (e) {
       return json(res, 500, { error: e.message });
     }
+  }
+
+  // El HUD reporta cambios de ventana en primer plano (para apagar alertas
+  // ya leídas). Solo llega cuando el hwnd CAMBIA; la permanencia se mide aquí.
+  if (route === "POST /api/foreground") {
+    const body = await readBody(req);
+    const hwnd = Number(body.hwnd);
+    if (!Number.isInteger(hwnd) || hwnd <= 0) return json(res, 400, { error: "hwnd inválido" });
+    if (hwnd !== fgHwnd) {
+      // Al abandonar una ventana, si estuvo el tiempo mínimo, dar por vistas
+      // sus alertas aunque el usuario se haya ido antes del siguiente chequeo
+      if (fgHwnd && Date.now() - fgSince >= ACK_DWELL_MS && ackSessionsOnHwnd(fgHwnd)) {
+        scheduleBroadcast();
+      }
+      fgHwnd = hwnd;
+      fgSince = Date.now();
+    }
+    return json(res, 200, { ok: true });
+  }
+
+  // Toast nativo bajo demanda (lo usa el pomodoro del HUD)
+  if (route === "POST /api/toast") {
+    const body = await readBody(req);
+    const title = String(body.title || "").trim().slice(0, 80);
+    const text = String(body.body || "").trim().slice(0, 200);
+    if (!title) return json(res, 400, { error: "title requerido" });
+    showToast(title, text);
+    return json(res, 200, { ok: true });
   }
 
   if (route === "POST /api/windows/focus") {

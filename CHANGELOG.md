@@ -4,6 +4,46 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.12.0] - 2026-07-18
+
+### Añadido
+- **Alertas que se apagan solas**: el HUD reporta la ventana en primer plano
+  al hub (`POST /api/foreground`); si visitas ≥4 s la ventana de una sesión
+  en 🔔/✓, la alerta se da por leída — la tarjeta pasa a `✓ Visto` (idle)
+  hasta que la sesión vuelva a hablar.
+- **Indicador de trabajo en progreso** en la píldora: el botón de un
+  escritorio con agentes trabajando muestra ⚙ en azul.
+- **Apartar ventana** (`Ctrl+Alt+U`, configurable `clearWindow`; también en
+  el menú de la píldora): recorta la ventana activa por el borde que menos
+  área pierda para que no solape la píldora (restaura si estaba maximizada).
+- **Pomodoro** sutil en la píldora (preferencia `pomodoro.enabled`): 🍅 foco /
+  ☕ pausa con cuenta regresiva, clic = iniciar/pausar (`Ctrl+Alt+P`,
+  configurable `pomodoro`), clic derecho = reiniciar, toast al cambiar de
+  fase. Controles completos (tiempos −/+, mostrar/ocultar) en el pie del deck
+  y en Ajustes; los cambios persisten sin reiniciar el HUD.
+- **Vista [?] del deck**: ayuda rápida con los hotkeys activos y los gestos
+  de mouse.
+- **Layout vertical** de la píldora (`pill.layout`: `h`/`v`, en Ajustes); el
+  deck se abre entonces a su costado.
+- Preferencia `pill.taskbar` (defecto activada): la píldora aparece en la
+  barra de tareas por si alguna ventana la cubre.
+- Endpoint `POST /api/toast` (toast nativo bajo demanda).
+
+### Cambiado
+- **La píldora siempre se ve al 100% con el mouse encima** (antes el hover no
+  la destapaba). Atenuado en reposo configurable (`pill.dim`): `idle` =
+  translúcida solo sin actividad nueva (defecto), `never` = siempre opaca.
+- El **topmost se reafirma cada 3 s** (píldora y deck): ciertas apps las
+  dejaban tapadas.
+- **Deck**: se re-ancla a todos los escritorios en cada apertura y, si quedó
+  visible en otro escritorio (anclado perdido), pasar el mouse por la píldora
+  lo trae al actual — ya no hay que volver a cerrarlo donde se abrió.
+- Pasada de diseño en píldora y deck: sombra suave, separadores, hover en
+  filas y botones, cabecera del deck reorganizada (vistas · 🍅 · navegación ·
+  fijar), tooltips más descriptivos.
+- Con `pill.corner` fijada, la píldora se **re-ancla a su esquina** tras cada
+  refresco (crece "hacia adentro" sin salirse de la pantalla).
+
 ## [0.11.0] - 2026-07-11
 
 ### Añadido

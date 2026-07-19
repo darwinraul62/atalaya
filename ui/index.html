@@ -225,6 +225,8 @@
       <label>Escritorio nuevo <input data-hk="newDesktop" placeholder="none"></label>
       <label>Fijar/soltar deck <input data-hk="toggleDeck" placeholder="none"></label>
       <label>★ Favorito de la ventana activa <input data-hk="pinSession" placeholder="Ctrl+Alt+S"></label>
+      <label>Apartar ventana de la píldora <input data-hk="clearWindow" placeholder="Ctrl+Alt+U"></label>
+      <label>Pomodoro: iniciar/pausar <input data-hk="pomodoro" placeholder="Ctrl+Alt+P"></label>
       <label>Esquina de la píldora
         <select id="setCorner">
           <option value="">libre (recordar arrastre)</option>
@@ -244,6 +246,27 @@
           <option value="5">5</option>
         </select>
       </label>
+      <label>Atenuar la píldora (el mouse encima siempre la muestra)
+        <select id="setDim">
+          <option value="idle">cuando no hay actividad nueva</option>
+          <option value="never">nunca (siempre opaca)</option>
+        </select>
+      </label>
+      <label>Orientación de la píldora
+        <select id="setLayout">
+          <option value="h">horizontal (una línea)</option>
+          <option value="v">vertical (columna)</option>
+        </select>
+      </label>
+    </div>
+    <h4>Píldora y pomodoro</h4>
+    <div class="set-checks">
+      <label><input type="checkbox" id="setTaskbar"> Mostrar la píldora en la barra de tareas (por si algo la tapa)</label>
+      <label><input type="checkbox" id="setPomoEnabled"> Pomodoro 🍅 visible en la píldora (controles en el deck)</label>
+    </div>
+    <div class="set-grid">
+      <label>Pomodoro: minutos de foco <input id="setPomoWork" type="number" min="5" max="120" step="5" placeholder="25"></label>
+      <label>Pomodoro: minutos de pausa <input id="setPomoBreak" type="number" min="1" max="60" placeholder="5"></label>
     </div>
     <p class="set-help">Haz clic en un campo y <strong>pulsa la combinación</strong>
       (requiere Ctrl/Alt/Shift/Win + una tecla) · <kbd>Esc</kbd> = desactivar (none) ·
@@ -263,7 +286,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.11.0";
+const UI_VERSION = "0.12.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -421,7 +444,8 @@ function sessionCard(s) {
     });
     card.title = "Doble clic: ir a esta sesión";
   }
-  const st = STATUS[s.status] || STATUS.idle;
+  // Alerta ya atendida: el usuario visitó la ventana y el hub la dio por leída
+  const st = s.attended ? { glyph: "✓", label: "Visto" } : STATUS[s.status] || STATUS.idle;
   const pill = el("span", "pill");
   pill.append(el("span", "glyph", st.glyph));
   pill.append(document.createTextNode(st.label + " · "));
@@ -732,6 +756,12 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
     document.getElementById("setCorner").value = (cfg.pill && cfg.pill.corner) || "";
     document.getElementById("setMaxPins").value =
       cfg.pill && cfg.pill.maxPins !== undefined ? String(cfg.pill.maxPins) : "0";
+    document.getElementById("setDim").value = (cfg.pill && cfg.pill.dim) || "idle";
+    document.getElementById("setLayout").value = (cfg.pill && cfg.pill.layout) || "h";
+    document.getElementById("setTaskbar").checked = !(cfg.pill && cfg.pill.taskbar === false);
+    document.getElementById("setPomoEnabled").checked = !!(cfg.pomodoro && cfg.pomodoro.enabled);
+    document.getElementById("setPomoWork").value = (cfg.pomodoro && cfg.pomodoro.workMin) || 25;
+    document.getElementById("setPomoBreak").value = (cfg.pomodoro && cfg.pomodoro.breakMin) || 5;
   } catch { /* hub caído: se queda vacío */ }
   syncPrefUI();
   settingsEl.showModal();
@@ -746,10 +776,18 @@ document.getElementById("setSave").addEventListener("click", async () => {
   const pill = {
     corner: document.getElementById("setCorner").value,
     maxPins: Number(document.getElementById("setMaxPins").value),
+    dim: document.getElementById("setDim").value,
+    layout: document.getElementById("setLayout").value,
+    taskbar: document.getElementById("setTaskbar").checked,
+  };
+  const pomodoro = {
+    enabled: document.getElementById("setPomoEnabled").checked,
+    workMin: Number(document.getElementById("setPomoWork").value) || 25,
+    breakMin: Number(document.getElementById("setPomoBreak").value) || 5,
   };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill });
+    const r = await postJson("/api/config", { hotkeys, pill, pomodoro });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";

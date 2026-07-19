@@ -62,7 +62,9 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
 
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
   clic y estás ahí. El actual se marca con ◉ (y fondo resaltado); el que pide
-  atención va en ámbar con 🔔. Opcionalmente puede mostrar también las
+  atención va en ámbar con 🔔; el que tiene **trabajo en progreso** muestra ⚙
+  en azul (así recuerdas qué escritorio tiene agentes trabajando).
+  Opcionalmente puede mostrar también las
   **sesiones importantes** (★) con salto de un clic: por defecto viven solo en
   el deck (`Máx. ★ favoritos en la píldora` en Ajustes, `0` = ocultas,
   prioridad a las que piden atención). Los contadores 🔔/⚙/✓ también son botones: clic = ir a la sesión que
@@ -70,6 +72,26 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   a su escritorio). El 📡 abre Atalaya en **máximo foco**: maximizada y
   enfocada en el monitor donde la dejaste. Doble clic = abrir panel ·
   arrastrar = mover · clic derecho = menú. La esquina se fija desde Ajustes.
+  - **Visibilidad**: con el mouse encima la píldora siempre se ve **al 100%**.
+    En reposo se atenúa solo cuando no hay nada nuevo; la preferencia
+    `Atenuar la píldora` (Ajustes) permite que **nunca** se atenúe. Su topmost
+    se reafirma cada 3 s (hay apps que la tapaban) y, por defecto, también
+    aparece en la **barra de tareas** por si algo la cubre (desactivable).
+  - **Orientación**: horizontal (una línea) o **vertical** (columna), en
+    Ajustes.
+  - Si una ventana te queda **debajo de la píldora** (un chat, un indicador),
+    `Ctrl+Alt+U` la **aparta**: recorta la ventana activa por el borde que
+    menos área le quite para que dejen de solaparse (si estaba maximizada, la
+    restaura primero). También está en el menú de la píldora.
+  - **Pomodoro** 🍅 opcional y sutil dentro de la píldora: actívalo con el
+    tomate del deck o en Ajustes. Clic = iniciar/pausar (`Ctrl+Alt+P`), clic
+    derecho = reiniciar; en foco muestra 🍅 y en descanso ☕, con toast al
+    cambiar de fase. Los tiempos (foco/pausa) se ajustan desde el pie del
+    deck sin reiniciar nada.
+- Cuando visitas la ventana de una sesión que estaba en 🔔/✓ (unos segundos
+  bastan), la alerta se da por **leída**: la tarjeta pasa a `✓ Visto` y deja
+  de contar como pendiente, hasta que esa sesión vuelva a hablar. (Antes las
+  alertas quedaban encendidas aunque ya hubieras atendido la terminal.)
 - **Deck** (al pasar el mouse sobre el HUD): mini-panel con una fila por
   escritorio — nombre, agentes por estado, el trabajo más relevante y nº de
   ventanas. El que pide atención se resalta en ámbar; el actual se marca ◉.
@@ -77,11 +99,19 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     (cambia el nombre real del escritorio de Windows).
   - **◀ ▶** = escritorio anterior/siguiente (con vuelta) · **+** = crear
     escritorio nuevo e ir a él.
-  - **[esc] / [★]**: alterna entre la vista por escritorios y la de
-    **importantes** (sesiones con estrella; clic = ir, clic derecho = quitar).
+  - **[esc] / [★] / [?]**: alterna entre la vista por escritorios, la de
+    **importantes** (sesiones con estrella; clic = ir, clic derecho = quitar)
+    y la **ayuda rápida** — tus atajos de teclado activos y los gestos de
+    mouse, para moverte sin memorizarlos.
+  - **🍅**: muestra/oculta el pomodoro de la píldora; con él activo, el pie
+    del deck trae sus controles (iniciar/pausar, reiniciar, minutos de foco y
+    pausa con −/+).
   - **📌 fijar**: el deck queda siempre visible — translúcido en reposo, opaco
     al pasar el mouse — para recordar de un vistazo qué hay en cada escritorio
-    sin ningún clic. La preferencia (y la vista elegida) persiste.
+    sin ningún clic. La preferencia (y la vista elegida) persiste. El deck se
+    re-ancla a todos los escritorios en cada apertura (si quedara "atrapado"
+    en otro escritorio, al volver a pasar el mouse por la píldora se trae al
+    actual).
 - **Panel**:
   - Secciones por **escritorio virtual**; la cabecera `🖥 <nombre>` es un botón
     que cambia a ese escritorio; tu escritorio actual se marca con `◉ aquí`.
@@ -115,8 +145,13 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+Right` | Escritorio siguiente (con vuelta al llegar al final) |
   | `Ctrl+Alt+Left` | Escritorio anterior (con vuelta) |
   | `Ctrl+Alt+S` | Fijar/quitar como favorita (★) la sesión de la ventana activa |
+  | `Ctrl+Alt+U` | Apartar la ventana activa para que no solape la píldora |
+  | `Ctrl+Alt+P` | Pomodoro: iniciar/pausar (lo activa si estaba oculto) |
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Fijar/soltar el deck |
+
+  La lista siempre a mano: vista **[?]** del deck (pasa el mouse por la
+  píldora).
 
   Se editan desde el propio panel (sección **⚙ Ajustes**, que también guarda
   la esquina de la píldora y reinicia el HUD para aplicar), o a mano en
