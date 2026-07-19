@@ -4,6 +4,15 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.14.0] - 2026-07-18
+
+### Añadido
+- **Recentrar la píldora** (`Ctrl+Alt+H`, configurable `recenterPill`;
+  también en el menú contextual): la trae a un punto predecible de la
+  pantalla principal — su esquina fija si está configurada, o abajo al
+  centro — para recuperarla cuando queda en una zona difícil de ver o fuera
+  de los límites (arrastre a otro monitor, cambio de resolución).
+
 ## [0.13.0] - 2026-07-18
 
 ### Cambiado

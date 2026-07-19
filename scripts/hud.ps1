@@ -92,6 +92,7 @@ $Hotkeys = @{
     pinSession  = "Ctrl+Alt+S"
     clearWindow = "Ctrl+Alt+U"
     pomodoro    = "Ctrl+Alt+P"
+    recenterPill = "Ctrl+Alt+H"
 }
 $PillCorner = ""
 $MaxPins = 0
@@ -785,7 +786,8 @@ function Update-Deck($s) {
             @{ K = $Hotkeys.toggleDeck;  D = "Mostrar/ocultar este deck" },
             @{ K = $Hotkeys.pinSession;  D = "Favorito: fijar/quitar la ventana activa" },
             @{ K = $Hotkeys.clearWindow; D = "Apartar la ventana activa de la pildora" },
-            @{ K = $Hotkeys.pomodoro;    D = "Pomodoro: iniciar o pausar" }
+            @{ K = $Hotkeys.pomodoro;    D = "Pomodoro: iniciar o pausar" },
+            @{ K = $Hotkeys.recenterPill; D = "Recentrar la pildora (si quedo fuera de vista)" }
         )
         foreach ($hk in $helpKeys) {
             if (-not $hk.K -or $hk.K.Trim().ToLower() -eq "none") { continue }
@@ -1144,6 +1146,26 @@ function Assert-Topmost {
     if ($script:DeckHwnd -and $deck.IsVisible) { [AtalayaHotkey]::AssertTopmost($script:DeckHwnd) }
 }
 
+# Recentrar la pildora: traerla a un punto predecible de la pantalla
+# principal cuando quedo en una zona dificil de ver o fuera de los limites
+# (arrastre a otro monitor, cambio de resolucion, etc.). Con esquina fija va
+# a su esquina; con posicion libre, abajo al centro.
+function Move-PillHome {
+    if ($PillCorner) {
+        Set-CornerPosition
+    } else {
+        $a = [System.Windows.SystemParameters]::WorkArea
+        $w = $window.ActualWidth
+        $h = $window.ActualHeight
+        if ($w -le 0 -or $h -le 0) { return }
+        $window.Left = $a.Left + [Math]::Max(0, ($a.Width - $w) / 2)
+        $window.Top  = $a.Bottom - $h - 7
+    }
+    $window.Opacity = 1.0   # bien visible hasta el siguiente refresco
+    Save-Position
+    if ($deck.IsVisible) { Position-Deck }
+}
+
 # Apartar la ventana activa: recorte minimo para que no solape la pildora.
 # Con el hotkey la ventana objetivo es la activa; desde el menu de la pildora
 # se usa la ultima ventana ajena que estuvo en primer plano.
@@ -1204,6 +1226,9 @@ $miClear.Add_Click({ Invoke-ClearWindow })
 $miPomo = New-Object System.Windows.Controls.MenuItem
 $miPomo.Header = "Pomodoro: iniciar/pausar"; $miPomo.InputGestureText = $Hotkeys.pomodoro
 $miPomo.Add_Click({ Toggle-Pomodoro })
+$miHome = New-Object System.Windows.Controls.MenuItem
+$miHome.Header = "Recentrar la pildora"; $miHome.InputGestureText = $Hotkeys.recenterPill
+$miHome.Add_Click({ Move-PillHome })
 $miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
 $miPin.Add_Click({ Pin-ToAllDesktops })
 $miExit = New-Object System.Windows.Controls.MenuItem; $miExit.Header = "Salir del HUD"
@@ -1213,6 +1238,7 @@ $miExit.Add_Click({ $window.Close() })
 [void]$menu.Items.Add($miJump)
 [void]$menu.Items.Add($miClear)
 [void]$menu.Items.Add($miPomo)
+[void]$menu.Items.Add($miHome)
 [void]$menu.Items.Add($miPin)
 [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
 [void]$menu.Items.Add($miExit)
@@ -1232,6 +1258,7 @@ $HotkeyHook = {
             7 { Pin-ForegroundSession }
             8 { Invoke-ClearWindow }
             9 { Toggle-Pomodoro }
+            10 { Move-PillHome }
         }
         $handled.Value = $true
     }
@@ -1252,7 +1279,8 @@ function Register-Hotkeys {
             @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "mostrar/ocultar deck" },
             @{ Id = 7; Spec = $Hotkeys.pinSession;  Name = "favorito de la ventana activa" },
             @{ Id = 8; Spec = $Hotkeys.clearWindow; Name = "apartar ventana de la pildora" },
-            @{ Id = 9; Spec = $Hotkeys.pomodoro;    Name = "pomodoro iniciar/pausar" }
+            @{ Id = 9; Spec = $Hotkeys.pomodoro;    Name = "pomodoro iniciar/pausar" },
+            @{ Id = 10; Spec = $Hotkeys.recenterPill; Name = "recentrar la pildora" }
         )
         foreach ($hk in $wanted) {
             $parsed = ConvertTo-Hotkey $hk.Spec
@@ -1304,7 +1332,7 @@ $window.Add_Closed({
     Save-Position
     try {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
-        foreach ($hkId in 1..9) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
+        foreach ($hkId in 1..10) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
     } catch { }
     try { Remove-Item (Join-Path $StateDir "hud.pid") -Force } catch { }
 })

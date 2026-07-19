@@ -153,6 +153,7 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+S` | Fijar/quitar como favorita (★) la sesión de la ventana activa |
   | `Ctrl+Alt+U` | Apartar la ventana activa para que no solape la píldora |
   | `Ctrl+Alt+P` | Pomodoro: iniciar/pausar (lo activa si estaba oculto) |
+  | `Ctrl+Alt+H` | Recentrar la píldora (si quedó fuera de vista o tras un cambio de monitor/resolución: va a su esquina fija, o abajo al centro) |
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Mostrar/ocultar el deck |
 

@@ -262,7 +262,7 @@ if (-not (Test-Path $cfgFile)) {
     $defaultCfg = '{ "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J", ' +
         '"nextDesktop": "Ctrl+Alt+Right", "prevDesktop": "Ctrl+Alt+Left", ' +
         '"newDesktop": "none", "toggleDeck": "none", "pinSession": "Ctrl+Alt+S", ' +
-        '"clearWindow": "Ctrl+Alt+U", "pomodoro": "Ctrl+Alt+P" }, ' +
+        '"clearWindow": "Ctrl+Alt+U", "pomodoro": "Ctrl+Alt+P", "recenterPill": "Ctrl+Alt+H" }, ' +
         '"pill": { "corner": "", "maxPins": 0, "dim": "idle", "layout": "h", "taskbar": false }, ' +
         '"deck": { "open": "click" }, ' +
         '"pomodoro": { "enabled": false, "workMin": 25, "breakMin": 5 } }'
