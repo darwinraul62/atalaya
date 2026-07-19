@@ -223,7 +223,7 @@
       <label>Escritorio siguiente <input data-hk="nextDesktop" placeholder="Ctrl+Alt+Right"></label>
       <label>Escritorio anterior <input data-hk="prevDesktop" placeholder="Ctrl+Alt+Left"></label>
       <label>Escritorio nuevo <input data-hk="newDesktop" placeholder="none"></label>
-      <label>Fijar/soltar deck <input data-hk="toggleDeck" placeholder="none"></label>
+      <label>Mostrar/ocultar deck <input data-hk="toggleDeck" placeholder="none"></label>
       <label>★ Favorito de la ventana activa <input data-hk="pinSession" placeholder="Ctrl+Alt+S"></label>
       <label>Apartar ventana de la píldora <input data-hk="clearWindow" placeholder="Ctrl+Alt+U"></label>
       <label>Pomodoro: iniciar/pausar <input data-hk="pomodoro" placeholder="Ctrl+Alt+P"></label>
@@ -258,6 +258,13 @@
           <option value="v">vertical (columna)</option>
         </select>
       </label>
+      <label>Apertura del deck
+        <select id="setDeckOpen">
+          <option value="click">clic en ▲ (o hotkey) — no se abre solo</option>
+          <option value="delay">hover intencional (~0,6 s sobre la píldora)</option>
+          <option value="hover">hover inmediato</option>
+        </select>
+      </label>
     </div>
     <h4>Píldora y pomodoro</h4>
     <div class="set-checks">
@@ -286,7 +293,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.12.1";
+const UI_VERSION = "0.13.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -759,6 +766,7 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
     document.getElementById("setDim").value = (cfg.pill && cfg.pill.dim) || "idle";
     document.getElementById("setLayout").value = (cfg.pill && cfg.pill.layout) || "h";
     document.getElementById("setTaskbar").checked = !!(cfg.pill && cfg.pill.taskbar);
+    document.getElementById("setDeckOpen").value = (cfg.deck && cfg.deck.open) || "click";
     document.getElementById("setPomoEnabled").checked = !!(cfg.pomodoro && cfg.pomodoro.enabled);
     document.getElementById("setPomoWork").value = (cfg.pomodoro && cfg.pomodoro.workMin) || 25;
     document.getElementById("setPomoBreak").value = (cfg.pomodoro && cfg.pomodoro.breakMin) || 5;
@@ -780,6 +788,7 @@ document.getElementById("setSave").addEventListener("click", async () => {
     layout: document.getElementById("setLayout").value,
     taskbar: document.getElementById("setTaskbar").checked,
   };
+  const deck = { open: document.getElementById("setDeckOpen").value };
   const pomodoro = {
     enabled: document.getElementById("setPomoEnabled").checked,
     workMin: Number(document.getElementById("setPomoWork").value) || 25,
@@ -787,7 +796,7 @@ document.getElementById("setSave").addEventListener("click", async () => {
   };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill, pomodoro });
+    const r = await postJson("/api/config", { hotkeys, pill, deck, pomodoro });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";

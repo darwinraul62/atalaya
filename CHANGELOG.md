@@ -4,6 +4,18 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.13.0] - 2026-07-18
+
+### Cambiado
+- **El deck ya no se abre solo por defecto**: nueva preferencia `deck.open`
+  (Ajustes → "Apertura del deck") con tres modos — `click` (defecto: botón
+  **▲/▼** nuevo en la píldora u hotkey `toggleDeck`, y cierre por abandono
+  más generoso, 1,2 s), `delay` (hover intencional de ~0,6 s: los roces
+  accidentales no lo levantan) y `hover` (inmediato, comportamiento
+  anterior).
+- El hotkey `toggleDeck` ahora **muestra/oculta el deck** (antes fijaba/
+  soltaba); el fijado sigue en el 📌 de la cabecera del deck.
+
 ## [0.12.1] - 2026-07-18
 
 ### Cambiado

@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.12.1";
+const VERSION = "0.13.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -873,6 +873,13 @@ const server = http.createServer(async (req, res) => {
       }
       if (body.pill.taskbar !== undefined) {
         cfg.pill.taskbar = !!body.pill.taskbar;
+      }
+    }
+    if (body.deck && typeof body.deck === "object") {
+      cfg.deck = { ...cfg.deck };
+      if (body.deck.open !== undefined) {
+        const v = String(body.deck.open);
+        cfg.deck.open = ["hover", "delay", "click"].includes(v) ? v : "click";
       }
     }
     if (body.pomodoro && typeof body.pomodoro === "object") {

@@ -264,6 +264,7 @@ if (-not (Test-Path $cfgFile)) {
         '"newDesktop": "none", "toggleDeck": "none", "pinSession": "Ctrl+Alt+S", ' +
         '"clearWindow": "Ctrl+Alt+U", "pomodoro": "Ctrl+Alt+P" }, ' +
         '"pill": { "corner": "", "maxPins": 0, "dim": "idle", "layout": "h", "taskbar": false }, ' +
+        '"deck": { "open": "click" }, ' +
         '"pomodoro": { "enabled": false, "workMin": 25, "breakMin": 5 } }'
     Set-Content -Path $cfgFile -Value $defaultCfg
     Write-Host "Creado $cfgFile (hotkeys y pildora configurables; 'none' desactiva)."

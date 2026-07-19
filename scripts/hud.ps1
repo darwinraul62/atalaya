@@ -100,6 +100,7 @@ $PillLayout = "h"     # "h" horizontal (una linea) / "v" vertical (columna)
 $PillTaskbar = $false # boton en la barra de tareas (apagado: la pildora flota
                       # sobre TODO, incluida la barra, gracias al topmost
                       # reafirmado; activar solo si se quiere el boton)
+$DeckOpen = "click"   # "click": boton/hotkey; "delay": hover ~600ms; "hover": hover inmediato
 $PomoCfgEnabled = $false
 $PomoCfgWork = 25
 $PomoCfgBreak = 5
@@ -113,6 +114,7 @@ try {
     if ($cfg.pill.dim -eq "never") { $PillDim = "never" }
     if ($cfg.pill.layout -eq "v") { $PillLayout = "v" }
     if ($null -ne $cfg.pill.taskbar) { $PillTaskbar = [bool]$cfg.pill.taskbar }
+    if ($cfg.deck.open -in @("hover", "delay", "click")) { $DeckOpen = [string]$cfg.deck.open }
     if ($cfg.pomodoro.enabled) { $PomoCfgEnabled = $true }
     if ($cfg.pomodoro.workMin) { $PomoCfgWork = [Math]::Min(120, [Math]::Max(5, [int]$cfg.pomodoro.workMin)) }
     if ($cfg.pomodoro.breakMin) { $PomoCfgBreak = [Math]::Min(60, [Math]::Max(1, [int]$cfg.pomodoro.breakMin)) }
@@ -164,6 +166,8 @@ $GlyphDish  = [char]::ConvertFromUtf32(0x1F4E1)   # antena: abrir Atalaya (maxim
 $GlyphTomato = [char]::ConvertFromUtf32(0x1F345)  # tomate: pomodoro en foco
 $GlyphCoffee = [char]::ConvertFromUtf32(0x2615)   # cafe: pomodoro en descanso
 $GlyphReset  = [char]::ConvertFromUtf32(0x1F504)  # flechas circulares: reiniciar pomodoro
+$GlyphUp     = [char]::ConvertFromUtf32(0x25B2)   # triangulo arriba: abrir el deck
+$GlyphDown   = [char]::ConvertFromUtf32(0x25BC)   # triangulo abajo: cerrar el deck
 
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -187,7 +191,8 @@ $xaml = @"
         <TextBlock x:Name="TxtWork"  FontSize="13" FontWeight="SemiBold" Foreground="#5B9CD9" VerticalAlignment="Center" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
         <TextBlock x:Name="TxtReady" FontSize="13" FontWeight="SemiBold" Foreground="#3FB3A8" VerticalAlignment="Center" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
         <TextBlock x:Name="TxtPomo"  FontSize="12.5" FontWeight="SemiBold" Foreground="#D98A7E" VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI" Visibility="Collapsed"/>
-        <TextBlock x:Name="BtnPanel" FontSize="13" FontWeight="SemiBold" Foreground="#8FA3B8" VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
+        <TextBlock x:Name="BtnDeck"  FontSize="10.5" FontWeight="SemiBold" Foreground="#8FA3B8" VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
+        <TextBlock x:Name="BtnPanel" FontSize="13" FontWeight="SemiBold" Foreground="#8FA3B8" VerticalAlignment="Center" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
       </StackPanel>
     </Border>
   </Grid>
@@ -203,6 +208,7 @@ $txtAttn  = $window.FindName("TxtAttn")
 $txtWork  = $window.FindName("TxtWork")
 $txtReady = $window.FindName("TxtReady")
 $txtPomo  = $window.FindName("TxtPomo")
+$btnDeck  = $window.FindName("BtnDeck")
 $btnPanel = $window.FindName("BtnPanel")
 
 # Preferencias de presentacion de la pildora
@@ -213,7 +219,7 @@ if ($Vertical) {
     $root.Orientation = "Vertical"
     $deskBtns.Orientation = "Vertical"; $deskBtns.Margin = "0,0,0,6"
     $pinBtns.Orientation = "Vertical";  $pinBtns.Margin = "0,0,0,6"
-    foreach ($tb in @($txtAttn, $txtWork, $txtReady, $txtPomo, $btnPanel)) {
+    foreach ($tb in @($txtAttn, $txtWork, $txtReady, $txtPomo, $btnDeck, $btnPanel)) {
         $tb.Margin = "0,5,0,0"; $tb.HorizontalAlignment = "Left"
     }
     $txtAttn.Margin = "0,0,0,0"
@@ -234,6 +240,17 @@ $btnPanel.Add_MouseLeftButtonDown({
     param($src, $e)
     $e.Handled = $true
     Open-PanelMax
+})
+
+# Boton del deck: apertura EXPLICITA (modo por defecto deck.open = "click");
+# el triangulo indica el estado (arriba = abrir, abajo = cerrar)
+$btnDeck.Text = $GlyphUp
+$btnDeck.Cursor = "Hand"
+$btnDeck.ToolTip = "Abrir/cerrar el deck (mini-panel de escritorios)"
+$btnDeck.Add_MouseLeftButtonDown({
+    param($src, $e)
+    $e.Handled = $true
+    if ($deck.IsVisible) { Hide-Deck } else { Show-Deck }
 })
 
 # Contadores clicables: ir a la sesion que MAS tiempo lleva en ese estado
@@ -765,7 +782,7 @@ function Update-Deck($s) {
             @{ K = $Hotkeys.prevDesktop; D = "Escritorio anterior (con vuelta)" },
             @{ K = $Hotkeys.nextDesktop; D = "Escritorio siguiente (con vuelta)" },
             @{ K = $Hotkeys.newDesktop;  D = "Crear escritorio nuevo e ir a el" },
-            @{ K = $Hotkeys.toggleDeck;  D = "Fijar/soltar este deck" },
+            @{ K = $Hotkeys.toggleDeck;  D = "Mostrar/ocultar este deck" },
             @{ K = $Hotkeys.pinSession;  D = "Favorito: fijar/quitar la ventana activa" },
             @{ K = $Hotkeys.clearWindow; D = "Apartar la ventana activa de la pildora" },
             @{ K = $Hotkeys.pomodoro;    D = "Pomodoro: iniciar o pausar" }
@@ -780,6 +797,7 @@ function Update-Deck($s) {
         }
         [void]$deckStack.Children.Add((New-DeckSep))
         $gestures = @(
+            @{ K = "clic triangulo";      D = "abrir/cerrar este deck" },
             @{ K = "doble clic pildora";  D = "abrir el panel completo" },
             @{ K = "arrastrar pildora";   D = "moverla (con esquina fija vuelve sola)" },
             @{ K = "clic contador";       D = "ir a la sesion mas antigua en ese estado" },
@@ -917,13 +935,29 @@ function Position-Deck {
     } catch { }
 }
 
+function Hide-Deck {
+    $deck.Hide()
+    $btnDeck.Text = $GlyphUp
+}
+
+# Cierre por abandono: en modo "click" (apertura explicita) el margen es mas
+# generoso para que no se esfume apenas mueves el mouse.
 $script:DeckHideTimer = New-Object System.Windows.Threading.DispatcherTimer
-$script:DeckHideTimer.Interval = [TimeSpan]::FromMilliseconds(450)
+$script:DeckHideTimer.Interval = [TimeSpan]::FromMilliseconds($(if ($DeckOpen -eq "click") { 1200 } else { 450 }))
 $script:DeckHideTimer.Add_Tick({
     $script:DeckHideTimer.Stop()
     if (-not $script:DeckPinned -and -not $deck.IsMouseOver -and -not $window.IsMouseOver) {
-        $deck.Hide()
+        Hide-Deck
     }
+})
+
+# Apertura por hover con retardo (modo "delay"): abre solo si el mouse sigue
+# sobre la pildora al vencer el temporizador (roce accidental = no abre)
+$script:DeckOpenTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:DeckOpenTimer.Interval = [TimeSpan]::FromMilliseconds(600)
+$script:DeckOpenTimer.Add_Tick({
+    $script:DeckOpenTimer.Stop()
+    if ($window.IsMouseOver) { Show-Deck }
 })
 
 function Show-Deck {
@@ -931,6 +965,7 @@ function Show-Deck {
     $script:DeckHideTimer.Stop()
     $first = -not $deck.IsVisible
     if ($first) { $deck.Show() }
+    $btnDeck.Text = $GlyphDown
     $deck.Opacity = 1.0
     Update-Deck $script:LastSummary
     Position-Deck
@@ -1125,9 +1160,22 @@ function Invoke-ClearWindow {
 }
 
 # ---- Eventos ----------------------------------------------------------------
-$window.Add_MouseEnter({ $window.Opacity = 1.0; Show-Deck })
+# Apertura del deck segun deck.open: "click" solo boton/hotkey (defecto),
+# "delay" hover intencional (600 ms), "hover" inmediato. Si ya esta abierto,
+# el hover siempre cancela el cierre pendiente.
+$window.Add_MouseEnter({
+    $window.Opacity = 1.0
+    # Deck ya abierto: Show-Deck cancela el cierre, refresca y lo rescata al
+    # escritorio actual si quedo en otro (no depende del modo de apertura)
+    if ($deck.IsVisible) { Show-Deck; return }
+    switch ($DeckOpen) {
+        "hover" { Show-Deck }
+        "delay" { $script:DeckOpenTimer.Start() }
+    }
+})
 $window.Add_MouseLeave({
     Set-PillOpacity
+    $script:DeckOpenTimer.Stop()
     if (-not $script:DeckPinned) { $script:DeckHideTimer.Start() }
 })
 
@@ -1180,7 +1228,7 @@ $HotkeyHook = {
             3 { Go-NextDesktop }
             4 { Go-PrevDesktop }
             5 { New-VirtualDesktop }
-            6 { Toggle-DeckPin }
+            6 { if ($deck.IsVisible) { Hide-Deck } else { Show-Deck } }
             7 { Pin-ForegroundSession }
             8 { Invoke-ClearWindow }
             9 { Toggle-Pomodoro }
@@ -1201,7 +1249,7 @@ function Register-Hotkeys {
             @{ Id = 3; Spec = $Hotkeys.nextDesktop; Name = "escritorio siguiente" },
             @{ Id = 4; Spec = $Hotkeys.prevDesktop; Name = "escritorio anterior" },
             @{ Id = 5; Spec = $Hotkeys.newDesktop;  Name = "escritorio nuevo" },
-            @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "fijar/soltar deck" },
+            @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "mostrar/ocultar deck" },
             @{ Id = 7; Spec = $Hotkeys.pinSession;  Name = "favorito de la ventana activa" },
             @{ Id = 8; Spec = $Hotkeys.clearWindow; Name = "apartar ventana de la pildora" },
             @{ Id = 9; Spec = $Hotkeys.pomodoro;    Name = "pomodoro iniciar/pausar" }

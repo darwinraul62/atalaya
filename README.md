@@ -94,9 +94,13 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   bastan), la alerta se da por **leída**: la tarjeta pasa a `✓ Visto` y deja
   de contar como pendiente, hasta que esa sesión vuelva a hablar. (Antes las
   alertas quedaban encendidas aunque ya hubieras atendido la terminal.)
-- **Deck** (al pasar el mouse sobre el HUD): mini-panel con una fila por
-  escritorio — nombre, agentes por estado, el trabajo más relevante y nº de
-  ventanas. El que pide atención se resalta en ámbar; el actual se marca ◉.
+- **Deck**: mini-panel con una fila por escritorio — nombre, agentes por
+  estado, el trabajo más relevante y nº de ventanas. El que pide atención se
+  resalta en ámbar; el actual se marca ◉. Se abre con el botón **▲** de la
+  píldora (o el hotkey `toggleDeck`) y se cierra con ▼ o alejando el mouse.
+  La preferencia `Apertura del deck` (Ajustes) permite volver al modo hover:
+  inmediato o con retardo intencional de ~0,6 s (los roces accidentales no lo
+  levantan).
   - **Clic** en una fila = ir a ese escritorio · **clic derecho** = renombrarlo
     (cambia el nombre real del escritorio de Windows).
   - **◀ ▶** = escritorio anterior/siguiente (con vuelta) · **+** = crear
@@ -150,7 +154,7 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+U` | Apartar la ventana activa para que no solape la píldora |
   | `Ctrl+Alt+P` | Pomodoro: iniciar/pausar (lo activa si estaba oculto) |
   | — (`none`) | Crear escritorio nuevo e ir a él |
-  | — (`none`) | Fijar/soltar el deck |
+  | — (`none`) | Mostrar/ocultar el deck |
 
   La lista siempre a mano: vista **[?]** del deck (pasa el mouse por la
   píldora).
