@@ -301,8 +301,9 @@ etiqueta informativa heredada (opcional).
 
 - Estado central: `%USERPROFILE%\.atalaya\` (`sessions/`, `notes.json`,
   `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
-  escritorio de cada sesión, `config.json` con los hotkeys, `hub.log`,
-  `hook-errors.log`, `hud.json` con la posición del HUD).
+  escritorio de cada sesión, `config.json` con los hotkeys y las preferencias
+  de píldora/deck/pomodoro — secciones `hotkeys`, `pill`, `deck`, `pomodoro` —,
+  `hub.log`, `hook-errors.log`, `hud.json` con la posición del HUD).
 - El hook **nunca** escribe a stdout ni falla (exit 0 siempre) para no
   interferir con Claude Code; sus errores van a `hook-errors.log`.
 - Si el HUD marca "sin conexión": ejecuta `atalaya.cmd` (rearranca el hub).
