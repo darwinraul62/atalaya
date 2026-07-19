@@ -32,8 +32,13 @@ public static class AtalayaHotkey {
 
     // Reafirma el topmost sin activar ni mover: algunas apps (instaladores,
     // overlays, otras topmost) dejan a la pildora por debajo hasta esto.
+    // OJO: HWND_TOPMOST sobre una ventana YA topmost no la reordena dentro
+    // de la banda topmost (donde vive la barra de tareas); el segundo paso
+    // con HWND_TOP la sube a la CIMA de esa banda -> queda sobre la barra.
     public static void AssertTopmost(long h) {
-        SetWindowPos(new IntPtr(h), new IntPtr(-1), 0, 0, 0, 0, 0x0013); // NOSIZE|NOMOVE|NOACTIVATE
+        IntPtr w = new IntPtr(h);
+        SetWindowPos(w, new IntPtr(-1), 0, 0, 0, 0, 0x0013); // NOSIZE|NOMOVE|NOACTIVATE
+        SetWindowPos(w, IntPtr.Zero, 0, 0, 0, 0, 0x0013);    // HWND_TOP
     }
 
     // Recorta la ventana <target> por el borde que MENOS area le quite para
@@ -92,7 +97,9 @@ $PillCorner = ""
 $MaxPins = 0
 $PillDim = "idle"     # "idle": atenuar cuando no hay actividad nueva; "never": siempre opaca
 $PillLayout = "h"     # "h" horizontal (una linea) / "v" vertical (columna)
-$PillTaskbar = $true  # mostrar la pildora tambien en la barra de tareas
+$PillTaskbar = $false # boton en la barra de tareas (apagado: la pildora flota
+                      # sobre TODO, incluida la barra, gracias al topmost
+                      # reafirmado; activar solo si se quiere el boton)
 $PomoCfgEnabled = $false
 $PomoCfgWork = 25
 $PomoCfgBreak = 5

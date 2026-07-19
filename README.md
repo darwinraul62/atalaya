@@ -75,8 +75,10 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   - **Visibilidad**: con el mouse encima la píldora siempre se ve **al 100%**.
     En reposo se atenúa solo cuando no hay nada nuevo; la preferencia
     `Atenuar la píldora` (Ajustes) permite que **nunca** se atenúe. Su topmost
-    se reafirma cada 3 s (hay apps que la tapaban) y, por defecto, también
-    aparece en la **barra de tareas** por si algo la cubre (desactivable).
+    se reafirma cada 3 s, así que flota sobre **todo** — otras apps topmost e
+    incluso la **barra de tareas** si la arrastras sobre ella. (En Ajustes hay
+    una preferencia opcional, apagada por defecto, para darle además un botón
+    en la barra de tareas.)
   - **Orientación**: horizontal (una línea) o **vertical** (columna), en
     Ajustes.
   - Si una ventana te queda **debajo de la píldora** (un chat, un indicador),

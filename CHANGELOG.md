@@ -4,6 +4,15 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.12.1] - 2026-07-18
+
+### Cambiado
+- `pill.taskbar` ahora **apagado por defecto**: la píldora no ocupa espacio
+  en la barra de tareas como app en ejecución. La garantía de visibilidad es
+  el **topmost reafirmado cada 3 s**, que la mantiene por encima de todo —
+  incluida la propia barra de tareas si se coloca sobre ella. La preferencia
+  queda disponible en Ajustes para quien sí quiera el botón.
+
 ## [0.12.0] - 2026-07-18
 
 ### Añadido

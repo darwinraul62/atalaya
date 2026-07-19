@@ -261,7 +261,7 @@
     </div>
     <h4>Píldora y pomodoro</h4>
     <div class="set-checks">
-      <label><input type="checkbox" id="setTaskbar"> Mostrar la píldora en la barra de tareas (por si algo la tapa)</label>
+      <label><input type="checkbox" id="setTaskbar"> Botón de la píldora en la barra de tareas (normalmente innecesario: flota sobre todo, barra incluida)</label>
       <label><input type="checkbox" id="setPomoEnabled"> Pomodoro 🍅 visible en la píldora (controles en el deck)</label>
     </div>
     <div class="set-grid">
@@ -286,7 +286,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.12.0";
+const UI_VERSION = "0.12.1";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -758,7 +758,7 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
       cfg.pill && cfg.pill.maxPins !== undefined ? String(cfg.pill.maxPins) : "0";
     document.getElementById("setDim").value = (cfg.pill && cfg.pill.dim) || "idle";
     document.getElementById("setLayout").value = (cfg.pill && cfg.pill.layout) || "h";
-    document.getElementById("setTaskbar").checked = !(cfg.pill && cfg.pill.taskbar === false);
+    document.getElementById("setTaskbar").checked = !!(cfg.pill && cfg.pill.taskbar);
     document.getElementById("setPomoEnabled").checked = !!(cfg.pomodoro && cfg.pomodoro.enabled);
     document.getElementById("setPomoWork").value = (cfg.pomodoro && cfg.pomodoro.workMin) || 25;
     document.getElementById("setPomoBreak").value = (cfg.pomodoro && cfg.pomodoro.breakMin) || 5;
