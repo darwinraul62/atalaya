@@ -1247,6 +1247,27 @@ function Update-TrayMenuState {
 
 function Open-PanelSettings { Invoke-WinCtl "-Action show-panel -Hash ajustes -HubUrl $HubUrl" }
 
+# Menu de la bandeja: si el hub ya sabe que hay version nueva, pide
+# confirmacion y actualiza; si no, dispara una comprobacion contra origin.
+function Invoke-UpdateAction {
+    $u = $null
+    if ($script:LastSummary) { $u = $script:LastSummary.update }
+    if ($u -and $u.available) {
+        $que = if ($u.tag) { [string]$u.tag } else { "la ultima version publicada" }
+        $r = [System.Windows.MessageBox]::Show(
+            "Atalaya se actualizara a $que y reiniciara el hub y el HUD.`n`nContinuar?",
+            "Actualizar Atalaya",
+            [System.Windows.MessageBoxButton]::YesNo,
+            [System.Windows.MessageBoxImage]::Question)
+        if ($r -eq [System.Windows.MessageBoxResult]::Yes) {
+            Invoke-HubPost "/api/update/run" "{}"
+        }
+        return
+    }
+    Invoke-HubPost "/api/update/check" "{}"
+    Invoke-HubPost "/api/toast" '{"title":"Atalaya","body":"Buscando actualizaciones..."}'
+}
+
 # Salir del todo: HUD y hub. Sin el hub dejan de registrarse las sesiones, asi
 # que el menu lo dice con esas palabras y ofrece aparte cerrar solo el HUD.
 function Exit-Atalaya {
@@ -1275,6 +1296,14 @@ function Update-TrayStatus($s) {
         $full = "$($s.needs_you) te necesitan - $($s.working) trabajando - $($s.ready) listas"
         if ($s.urgent) { $full += " | Atiende: $($s.urgent)" }
         $script:TrayStatus.Text = $full
+        if ($script:TrayUpdate) {
+            if ($s.update -and $s.update.available) {
+                $que = if ($s.update.tag) { [string]$s.update.tag } else { "la ultima version" }
+                $script:TrayUpdate.Text = "Actualizar Atalaya a $que"
+            } else {
+                $script:TrayUpdate.Text = "Buscar actualizaciones"
+            }
+        }
     } catch { }
 }
 
@@ -1443,6 +1472,8 @@ $null = Add-TrayItem "Pomodoro: iniciar/pausar" $Hotkeys.pomodoro { Toggle-Pomod
 $null = Add-TrayItem "Apartar la ventana activa" $Hotkeys.clearWindow { Invoke-ClearWindow }
 Add-TraySep
 $null = Add-TrayItem "Ajustes" "" { Open-PanelSettings }
+# El texto cambia solo cuando el hub detecta version nueva (ver Update-TrayStatus)
+$script:TrayUpdate = Add-TrayItem "Buscar actualizaciones" "" { Invoke-UpdateAction }
 $null = Add-TrayItem "Reiniciar el HUD" "" { Invoke-HubPost "/api/hud/restart" "{}" }
 Add-TraySep
 $null = Add-TrayItem "Cerrar el HUD (el hub sigue)" "" { $window.Close() }

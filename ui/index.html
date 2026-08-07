@@ -46,6 +46,15 @@
     font-weight: 600; font-size: 12.5px; border-radius: 6px; padding: 3px 10px;
   }
   body.offline #offline { display: inline-block; }
+  /* Aviso de versión nueva: visible pero sin robarle protagonismo a los
+     estados de las sesiones (glifo ⬆ además del color, tema daltonized) */
+  #updateBtn {
+    display: inline-flex; align-items: center; gap: 6px; cursor: pointer;
+    background: var(--ready-bg); color: var(--ready); border: 1px solid currentColor;
+    border-radius: 999px; padding: 4px 13px; font: 600 12.5px var(--ui);
+  }
+  #updateBtn:hover { filter: brightness(1.08); }
+  #updateBtn[hidden] { display: none; }
 
   .chips { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
   button.chip {
@@ -185,6 +194,9 @@
   <div class="bar-inner">
     <div class="brand"><strong>Atalaya</strong><span>monitor de sesiones</span></div>
     <span id="offline">⚠ sin conexión con el hub — reintentando…</span>
+    <button id="updateBtn" hidden title="Trae la última versión publicada, recompila y reinicia">
+      ⬆ <span id="updateVer">Actualización disponible</span>
+    </button>
     <div class="chips" role="group" aria-label="Filtros y accesos" id="chips">
       <button class="chip attn" data-f="needs_you" aria-pressed="false">🔔 Te necesita <span class="n">0</span></button>
       <button class="chip work" data-f="working" aria-pressed="false">⚙ Trabajando <span class="n">0</span></button>
@@ -275,6 +287,13 @@
     <div class="set-grid">
       <label>Pomodoro: minutos de foco <input id="setPomoWork" type="number" min="5" max="120" step="5" placeholder="25"></label>
       <label>Pomodoro: minutos de pausa <input id="setPomoBreak" type="number" min="1" max="60" placeholder="5"></label>
+    </div>
+    <h4>Actualizaciones</h4>
+    <div class="set-checks">
+      <label><input type="checkbox" id="setUpdateCheck"> Avisarme cuando haya una versión nueva (consulta al repositorio, sin instalar nada)</label>
+    </div>
+    <div class="set-grid">
+      <label>Cada cuántas horas comprobar <input id="setUpdateHours" type="number" min="1" max="168" placeholder="12"></label>
     </div>
     <p class="set-help">Haz clic en un campo y <strong>pulsa la combinación</strong>
       (requiere Ctrl/Alt/Shift/Win + una tecla) · <kbd>Esc</kbd> = desactivar (none) ·
@@ -772,6 +791,9 @@ settingsBtn.addEventListener("click", async () => {
     document.getElementById("setPomoEnabled").checked = !!(cfg.pomodoro && cfg.pomodoro.enabled);
     document.getElementById("setPomoWork").value = (cfg.pomodoro && cfg.pomodoro.workMin) || 25;
     document.getElementById("setPomoBreak").value = (cfg.pomodoro && cfg.pomodoro.breakMin) || 5;
+    // Sin la clave, el valor por defecto es comprobar (opt-out, no opt-in)
+    document.getElementById("setUpdateCheck").checked = !(cfg.update && cfg.update.check === false);
+    document.getElementById("setUpdateHours").value = (cfg.update && cfg.update.intervalHours) || 12;
   } catch { /* hub caído: se queda vacío */ }
   syncPrefUI();
   settingsEl.showModal();
@@ -800,9 +822,13 @@ document.getElementById("setSave").addEventListener("click", async () => {
     workMin: Number(document.getElementById("setPomoWork").value) || 25,
     breakMin: Number(document.getElementById("setPomoBreak").value) || 5,
   };
+  const update = {
+    check: document.getElementById("setUpdateCheck").checked,
+    intervalHours: Number(document.getElementById("setUpdateHours").value) || 12,
+  };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill, deck, pomodoro });
+    const r = await postJson("/api/config", { hotkeys, pill, deck, pomodoro, update });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";
@@ -825,6 +851,34 @@ window.addEventListener("focus", async () => {
 });
 
 // SSE con reconexión
+// ── Actualizaciones ─────────────────────────────────────────────────────────
+// El hub consulta a origin cada 12 h; aquí solo se refleja el resultado.
+const updateBtn = document.getElementById("updateBtn");
+const updateVer = document.getElementById("updateVer");
+let updating = false;
+
+function renderUpdate(info) {
+  if (updating) return;
+  if (!info || !info.available) { updateBtn.hidden = true; return; }
+  const cuantos = info.behind === 1 ? "1 cambio" : `${info.behind} cambios`;
+  updateVer.textContent = info.tag ? `Actualizar a ${info.tag}` : `Actualizar (${cuantos})`;
+  updateBtn.title = `Hay ${cuantos} publicados. Trae la última versión, recompila y reinicia hub y HUD.`;
+  updateBtn.hidden = false;
+}
+
+updateBtn.addEventListener("click", async () => {
+  if (updating) return;
+  if (!confirm("Atalaya se actualizará y reiniciará (hub y HUD).\n\n¿Continuar?")) return;
+  updating = true;
+  updateVer.textContent = "Actualizando…";
+  updateBtn.disabled = true;
+  try {
+    await fetch("/api/update/run", { method: "POST" });
+  } catch { /* el hub muere durante la actualización: es lo esperado */ }
+  // El hub vuelve con versión nueva y el panel se auto-recarga solo (hubVersion)
+  setTimeout(() => { updating = false; updateBtn.disabled = false; }, 60000);
+});
+
 function connect() {
   const es = new EventSource("/events");
   es.onmessage = (e) => {
@@ -838,6 +892,7 @@ function connect() {
         location.replace("/?v=" + encodeURIComponent(state.hubVersion));
         return;
       }
+      renderUpdate(state.update);
       render();
     } catch { /* frame corrupto */ }
   };

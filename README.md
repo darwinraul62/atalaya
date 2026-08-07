@@ -55,6 +55,8 @@ atalaya.cmd -Status            :: estado de hub y HUD
 atalaya.cmd -Stop              :: detiene todo
 atalaya.cmd -InstallAutostart  :: arrancar con Windows
 atalaya.cmd -InstallShortcuts  :: registrarlo en el menú Inicio
+atalaya.cmd -Check             :: ¿hay versión nueva?
+atalaya.cmd -Update            :: actualizar a la última versión
 atalaya.cmd -Doctor            :: informe de salud (ver Instalación para más)
 ```
 
@@ -245,18 +247,67 @@ Comandos de mantenimiento:
 ```bat
 atalaya -Integrate    :: instalaste un agente DESPUES? re-escanea e integra
 atalaya -Doctor       :: informe de salud: requisitos, procesos, integraciones
-atalaya -Uninstall    :: retira hooks (restaurando lo previo), autostart y PATH
-atalaya -Uninstall -PurgeState  :: lo anterior + borra %USERPROFILE%\.atalaya
+atalaya -Check        :: consulta si hay version nueva (no toca nada)
+atalaya -Update       :: actualiza, recompila, reintegra y reinicia
 ```
 
 Las sesiones de agentes ya abiertas deben **reiniciarse** para tomar los
 hooks.
 
+### Actualizarse
+
+La instalación **es** un clone de git, así que actualizar es traer la última
+versión publicada. Hay tres caminos, todos equivalentes:
+
+- **Desde el panel**: cuando hay versión nueva aparece un botón `⬆ Actualizar
+  a vX.Y.Z` en la cabecera. Un clic (con confirmación) y listo.
+- **Desde la bandeja del sistema**: la opción *Buscar actualizaciones* pasa a
+  decir *Actualizar Atalaya a vX.Y.Z* cuando la hay.
+- **Desde la terminal**: `atalaya -Update` (o `atalaya -Check` para solo mirar).
+
+El hub consulta a `origin` **una vez cada 12 h** (y al minuto de arrancar). Se
+ajusta o se apaga en `%USERPROFILE%\.atalaya\config.json`:
+
+```json
+{ "update": { "check": true, "intervalHours": 12 } }
+```
+
+Qué hace exactamente una actualización: detiene hub y HUD → `git merge
+--ff-only` de la rama de origin → recompila `bin\Atalaya.exe` → rehace los
+accesos directos y el registro → reintegra los hooks de los agentes (por si
+cambiaron) → vuelve a arrancar y avisa con un toast.
+
+**Nunca pisa trabajo local.** Si el clone tiene cambios sin guardar o commits
+propios que no están en origin, se detiene y lo explica en vez de fusionar
+nada. (Un clone de desarrollo se actualiza a mano, con `git pull --rebase`.)
+Tampoco se toca `workspaces.json` ni `%USERPROFILE%\.atalaya\`: tu
+configuración sobrevive a las actualizaciones.
+
+### Desinstalarse
+
+Atalaya queda registrado en **Configuración → Aplicaciones → Aplicaciones
+instaladas**, con su icono y su botón **Desinstalar**, como cualquier otro
+programa. Equivale a:
+
+```bat
+atalaya -Uninstall                 :: hooks (restaurando lo previo), accesos
+                                   :: directos, autoarranque, PATH y registro
+atalaya -Uninstall -PurgeState     :: lo anterior + borra %USERPROFILE%\.atalaya
+atalaya -Uninstall -RemoveFiles    :: lo anterior + borra la carpeta instalada
+```
+
+Sin `-PurgeState` tu estado (sesiones, etiquetas, favoritos, notas, config) se
+conserva por si reinstalas. Sin `-RemoveFiles` los archivos siguen donde
+estaban.
+
 Qué toca fuera del repo (y nada más): `~/.claude/settings.json` (Windows y
 WSL), `~/.codex/config.toml` (Windows y WSL) — ambos con backup previo —,
 `%USERPROFILE%\.atalaya\` (estado), el PATH del usuario, un acceso directo
-`Atalaya.lnk` en el menú Inicio y, si usas `-InstallAutostart`, otro en la
-carpeta Inicio (arranque automático).
+`Atalaya.lnk` en el menú Inicio, una clave en
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\Atalaya` (para que
+aparezca en "Aplicaciones instaladas") y, si usas `-InstallAutostart`, otro
+acceso directo en la carpeta Inicio. Todo por usuario: **nada requiere
+permisos de administrador**, y `-Uninstall` lo revierte.
 
 ### Atalaya como aplicación de Windows
 
@@ -353,8 +404,10 @@ etiqueta informativa heredada (opcional).
 - Estado central: `%USERPROFILE%\.atalaya\` (`sessions/`, `notes.json`,
   `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
   escritorio de cada sesión, `config.json` con los hotkeys y las preferencias
-  de píldora/deck/pomodoro — secciones `hotkeys`, `pill`, `deck`, `pomodoro` —,
-  `hub.log`, `hook-errors.log`, `hud.json` con la posición del HUD).
+  — secciones `hotkeys`, `pill`, `deck`, `pomodoro`, `update` —, `update.json`
+  con el resultado de la última consulta de versión, `hub.log`,
+  `hook-errors.log`, `hud.json` con la posición del HUD y si la píldora está
+  oculta).
 - El hook **nunca** escribe a stdout ni falla (exit 0 siempre) para no
   interferir con Claude Code; sus errores van a `hook-errors.log`.
 - Si el HUD marca "sin conexión": ejecuta `atalaya.cmd` (rearranca el hub).

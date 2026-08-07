@@ -13,6 +13,9 @@
 #   atalaya.cmd -InstallAutostart  arranca Atalaya al iniciar sesion de Windows
 #   atalaya.cmd -InstallShortcuts  crea el acceso directo del menu Inicio (para
 #                                  buscar "Atalaya" y anclarlo a la barra)
+#   atalaya.cmd -Update            trae la ultima version publicada (git pull),
+#                                  recompila, reintegra y reinicia; -Check solo
+#                                  informa si hay novedad, sin tocar nada
 param(
     [switch]$Panel,
     [switch]$Stop,
@@ -22,8 +25,11 @@ param(
     [switch]$Setup,
     [switch]$Integrate,
     [switch]$Doctor,
+    [switch]$Update,
+    [switch]$Check,
     [switch]$Uninstall,
-    [switch]$PurgeState
+    [switch]$PurgeState,
+    [switch]$RemoveFiles
 )
 
 $ErrorActionPreference = "SilentlyContinue"
@@ -59,6 +65,56 @@ function Install-Shortcuts([bool]$WithAutostart) {
     return (Test-Path $StartMenuLnk)
 }
 
+# ---- Registro de aplicacion instalada ---------------------------------------
+# Con esta clave del registro (por usuario, sin permisos de administrador)
+# Atalaya aparece en "Configuracion > Aplicaciones > Aplicaciones instaladas"
+# con su icono y su boton Desinstalar, como cualquier otro programa.
+$UninstallKey = "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall\Atalaya"
+
+function Get-AtalayaVersion {
+    try {
+        $pkg = Get-Content (Join-Path $RepoRoot "package.json") -Raw | ConvertFrom-Json
+        if ($pkg.version) { return [string]$pkg.version }
+    } catch { }
+    return "0.0.0"
+}
+
+function Register-UninstallEntry {
+    try {
+        New-Item -Path $UninstallKey -Force | Out-Null
+        $ps = "$env:WINDIR\System32\WindowsPowerShell\v1.0\powershell.exe"
+        # -NoExit: la ventana queda abierta para que se lea el informe cuando
+        # la desinstalacion se lanza desde Configuracion de Windows.
+        $cmd = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -NoExit -File `"$RepoRoot\atalaya.ps1`" -Uninstall"
+        $quiet = "`"$ps`" -NoProfile -ExecutionPolicy Bypass -File `"$RepoRoot\atalaya.ps1`" -Uninstall"
+        $size = 0
+        try {
+            $size = [int](((Get-ChildItem $RepoRoot -Recurse -File -Force -ErrorAction SilentlyContinue |
+                Measure-Object Length -Sum).Sum) / 1024)
+        } catch { }
+        Set-ItemProperty $UninstallKey "DisplayName"      "Atalaya"
+        Set-ItemProperty $UninstallKey "DisplayVersion"   (Get-AtalayaVersion)
+        Set-ItemProperty $UninstallKey "Publisher"        "Atalaya (proyecto MIT)"
+        Set-ItemProperty $UninstallKey "DisplayIcon"      (Join-Path $RepoRoot "assets\atalaya.ico")
+        Set-ItemProperty $UninstallKey "InstallLocation"  $RepoRoot
+        Set-ItemProperty $UninstallKey "UninstallString"  $cmd
+        Set-ItemProperty $UninstallKey "QuietUninstallString" $quiet
+        Set-ItemProperty $UninstallKey "URLInfoAbout"     "https://github.com/darwinraul62/atalaya"
+        Set-ItemProperty $UninstallKey "NoModify" 1 -Type DWord
+        Set-ItemProperty $UninstallKey "NoRepair" 1 -Type DWord
+        if ($size -gt 0) { Set-ItemProperty $UninstallKey "EstimatedSize" $size -Type DWord }
+        return $true
+    } catch { return $false }
+}
+
+function Unregister-UninstallEntry {
+    if (Test-Path $UninstallKey) {
+        Remove-Item $UninstallKey -Recurse -Force
+        return $true
+    }
+    return $false
+}
+
 function Get-Http([string]$url) {
     try {
         $req = [System.Net.WebRequest]::Create($url)
@@ -87,6 +143,66 @@ function Stop-Atalaya {
     $hubPid = Get-PidAlive (Join-Path $StateDir "hub.pid")
     if ($hubPid) { Stop-Process -Id $hubPid -Force; Write-Host "Hub detenido (pid $hubPid)" }
     if (-not $hudPid -and -not $hubPid) { Write-Host "Nada que detener." }
+}
+
+function Show-Toast([string]$title, [string]$body) {
+    $env:ATALAYA_TOAST_TITLE = $title
+    $env:ATALAYA_TOAST_BODY = $body
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $RepoRoot "scripts\toast.ps1") | Out-Null
+    Remove-Item env:ATALAYA_TOAST_TITLE, env:ATALAYA_TOAST_BODY -ErrorAction SilentlyContinue
+}
+
+# ---- Actualizacion -----------------------------------------------------------
+# La instalacion ES un clone de git, asi que actualizar = traer la rama de
+# origin con --ff-only: si el clone tiene commits propios o cambios sin guardar
+# se avisa y NO se toca nada. Nunca se pisa trabajo local.
+
+function Invoke-Git([string[]]$gitArgs) {
+    $out = & git -C $RepoRoot @gitArgs 2>&1
+    return [pscustomobject]@{ Code = $LASTEXITCODE; Out = (($out | Out-String).Trim()) }
+}
+
+function Test-GitClone {
+    if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
+        Write-Host "[x] No encuentro git, y la actualizacion lo necesita (https://git-scm.com)."
+        return $false
+    }
+    if ((Invoke-Git @("rev-parse", "--is-inside-work-tree")).Code -ne 0) {
+        Write-Host "[x] $RepoRoot no es un clone de git."
+        Write-Host "    Reinstala con el instalador de una linea (ver README) para tener actualizaciones."
+        return $false
+    }
+    if ((Invoke-Git @("remote", "get-url", "origin")).Code -ne 0) {
+        Write-Host "[x] Este clone no tiene remoto 'origin': no se de donde traer la actualizacion."
+        return $false
+    }
+    return $true
+}
+
+# $null si no se pudo consultar (ya se informo el motivo).
+function Get-UpdateStatus {
+    $branch = (Invoke-Git @("rev-parse", "--abbrev-ref", "HEAD")).Out
+    $fetch = Invoke-Git @("fetch", "--quiet", "--tags", "origin")
+    if ($fetch.Code -ne 0) {
+        Write-Host "[x] No pude consultar origin: $($fetch.Out)"
+        return $null
+    }
+    $up = Invoke-Git @("rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")
+    if ($up.Code -ne 0) {
+        Write-Host "[x] La rama '$branch' no sigue a ninguna rama de origin."
+        return $null
+    }
+    $counts = @((Invoke-Git @("rev-list", "--left-right", "--count", "HEAD...@{u}")).Out -split "\s+")
+    $tag = (Invoke-Git @("describe", "--tags", "--abbrev=0", "@{u}")).Out
+    return [pscustomobject]@{
+        Branch    = $branch
+        Upstream  = $up.Out
+        Ahead     = if ($counts.Count -ge 1) { [int]$counts[0] } else { 0 }
+        Behind    = if ($counts.Count -ge 2) { [int]$counts[1] } else { 0 }
+        Dirty     = ((Invoke-Git @("status", "--porcelain")).Out).Length -gt 0
+        RemoteTag = $tag
+    }
 }
 
 # ---- Integracion de agentes (Windows + WSL) ---------------------------------
@@ -253,10 +369,81 @@ if ($Doctor) {
     $lnkPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
     if (Test-Path $lnkPath) { Write-Host "[+] Autoarranque: instalado" }
     else { Write-Host "[-] Autoarranque: no instalado (atalaya -InstallAutostart)" }
+    if (Test-Path $UninstallKey) {
+        Write-Host "[+] Aplicaciones instaladas: registrado (se desinstala desde Configuracion de Windows)"
+    } else {
+        Write-Host "[-] Aplicaciones instaladas: no registrado (atalaya -Setup lo registra)"
+    }
+    # Actualizaciones: no consultamos la red aqui (el doctor debe ser rapido y
+    # funcionar sin conexion); solo se informa si el clone puede recibirlas.
+    if ((Get-Command git -ErrorAction SilentlyContinue) -and
+        (Invoke-Git @("rev-parse", "--is-inside-work-tree")).Code -eq 0 -and
+        (Invoke-Git @("remote", "get-url", "origin")).Code -eq 0) {
+        Write-Host "[+] Actualizaciones: disponibles (atalaya -Check informa, atalaya -Update instala)"
+    } else {
+        Write-Host "[-] Actualizaciones: este directorio no es un clone de git con origin"
+    }
     Write-Host ""
     Write-Host "=== Integraciones de agentes ==="
     Invoke-Integrate @("--status")
     exit 0
+}
+
+if ($Update -or $Check) {
+    $before = Get-AtalayaVersion
+    Write-Host "=== Atalaya: actualizacion ==="
+    Write-Host "Version instalada: v$before  ($RepoRoot)"
+    if (-not (Test-GitClone)) { exit 1 }
+    $st = Get-UpdateStatus
+    if (-not $st) { exit 1 }
+
+    if ($st.Behind -eq 0) {
+        Write-Host "[+] Ya estas en la ultima version publicada (rama $($st.Branch))."
+        if ($st.Ahead -gt 0) { Write-Host "[-] Ademas tienes $($st.Ahead) commit(s) propios sin publicar." }
+        exit 0
+    }
+
+    $novedad = if ($st.RemoteTag) { "$($st.Behind) commit(s) nuevos, ultima etiqueta $($st.RemoteTag)" }
+        else { "$($st.Behind) commit(s) nuevos" }
+    Write-Host "[!] Hay actualizacion disponible: $novedad"
+    if ($Check) {
+        Write-Host "    Instalala con: atalaya -Update"
+        exit 0
+    }
+
+    # Barreras: --ff-only fallaria igual, pero un mensaje claro vale mas que
+    # un error de git.
+    if ($st.Dirty) {
+        Write-Host "[x] Hay cambios sin guardar en el clone. Guardalos o descartalos y reintenta:"
+        Write-Host "    git -C `"$RepoRoot`" status"
+        exit 1
+    }
+    if ($st.Ahead -gt 0) {
+        Write-Host "[x] Este clone tiene $($st.Ahead) commit(s) propios que no estan en origin."
+        Write-Host "    Es un clone de desarrollo: actualizalo a mano (git pull --rebase) para no perderlos."
+        exit 1
+    }
+
+    Write-Host "... Deteniendo Atalaya"
+    Stop-Atalaya
+    $merge = Invoke-Git @("merge", "--ff-only", "@{u}")
+    if ($merge.Code -ne 0) {
+        Write-Host "[x] La actualizacion fallo: $($merge.Out)"
+        Write-Host "    No se cambio nada; arrancando de nuevo la version actual."
+    } else {
+        $after = Get-AtalayaVersion
+        Write-Host "[+] Codigo actualizado: v$before -> v$after"
+        Write-Host "... Recompilando y re-registrando"
+        if (Build-Host) { Write-Host "[+] Atalaya.exe recompilado" }
+        else { Write-Host "[-] Atalaya.exe no se pudo recompilar (seguira el modo PowerShell)" }
+        Install-Shortcuts $false | Out-Null
+        Register-UninstallEntry | Out-Null
+        # Los hooks pueden haber cambiado entre versiones; es idempotente.
+        Invoke-Integrate @()
+        Show-Toast "Atalaya actualizado" "v$before -> v$after. Reiniciando hub y HUD."
+    }
+    Write-Host ""
+    # Cae al arranque normal: deja hub + HUD corriendo con el codigo nuevo.
 }
 
 if ($Uninstall) {
@@ -268,6 +455,8 @@ if ($Uninstall) {
     else { Write-Host "[-] Autoarranque: no estaba instalado" }
     if (Test-Path $StartMenuLnk) { Remove-Item $StartMenuLnk -Force; Write-Host "[+] Acceso directo del menu Inicio retirado" }
     else { Write-Host "[-] Menu Inicio: no habia acceso directo" }
+    if (Unregister-UninstallEntry) { Write-Host "[+] Retirado de 'Aplicaciones instaladas' de Windows" }
+    else { Write-Host "[-] No estaba registrado en 'Aplicaciones instaladas'" }
     if (Remove-RepoFromPath) { Write-Host "[+] Repo retirado del PATH de usuario" }
     else { Write-Host "[-] PATH de usuario: no incluia el repo" }
     if ($PurgeState) {
@@ -277,7 +466,19 @@ if ($Uninstall) {
         Write-Host "[-] Estado conservado en $StateDir (usa -Uninstall -PurgeState para borrarlo)"
     }
     Write-Host ""
-    Write-Host "Listo. El repo en si no se borra: eliminalo a mano si ya no lo quieres."
+    if ($RemoveFiles) {
+        # No podemos borrarnos a nosotros mismos mientras corremos DESDE esa
+        # carpeta: se deja un cmd suelto que espera unos segundos y la borra.
+        Write-Host "[+] La carpeta $RepoRoot se borrara en unos segundos."
+        Start-Process -FilePath "cmd.exe" `
+            -ArgumentList "/c timeout /t 5 /nobreak >nul & rd /s /q `"$RepoRoot`"" `
+            -WindowStyle Hidden
+        Write-Host ""
+        Write-Host "Atalaya desinstalado por completo. Gracias por usarlo."
+    } else {
+        Write-Host "Listo. Los archivos siguen en $RepoRoot"
+        Write-Host "  - para borrarlos tambien: atalaya -Uninstall -RemoveFiles"
+    }
     exit 0
 }
 
@@ -308,6 +509,12 @@ if ($Setup) {
     if (Install-Shortcuts $false) { Write-Host "[+] Menu Inicio: buscable como 'Atalaya' y anclable a la barra de tareas" }
     else { Write-Host "[-] Menu Inicio: no se pudo crear el acceso directo" }
 
+    if (Register-UninstallEntry) {
+        Write-Host "[+] Registrado en 'Aplicaciones instaladas' de Windows (con boton Desinstalar)"
+    } else {
+        Write-Host "[-] No se pudo registrar en 'Aplicaciones instaladas' (se desinstala con: atalaya -Uninstall)"
+    }
+
     Write-Host "... Integrando agentes (Claude Code, Codex; Windows + WSL)"
     Invoke-Integrate @()
 
@@ -316,6 +523,7 @@ if ($Setup) {
 
     Write-Host ""
     Write-Host "Instalacion completa. Siguientes pasos opcionales:"
+    Write-Host "  - atalaya -Update             (traer la ultima version cuando quieras)"
     Write-Host "  - atalaya -InstallAutostart   (arrancar con Windows)"
     Write-Host "  - editar workspaces.json      (nombres y puertos de tus proyectos)"
     Write-Host "  - atalaya -Doctor             (verificar todo cuando quieras)"
@@ -342,7 +550,8 @@ if (-not (Test-Path $cfgFile)) {
         '"clearWindow": "Ctrl+Alt+U", "pomodoro": "Ctrl+Alt+P", "recenterPill": "Ctrl+Alt+H" }, ' +
         '"pill": { "corner": "", "maxPins": 0, "dim": "idle", "layout": "h", "taskbar": false }, ' +
         '"deck": { "open": "click" }, ' +
-        '"pomodoro": { "enabled": false, "workMin": 25, "breakMin": 5 } }'
+        '"pomodoro": { "enabled": false, "workMin": 25, "breakMin": 5 }, ' +
+        '"update": { "check": true, "intervalHours": 12 } }'
     Set-Content -Path $cfgFile -Value $defaultCfg
     Write-Host "Creado $cfgFile (hotkeys y pildora configurables; 'none' desactiva)."
 }

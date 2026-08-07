@@ -33,6 +33,19 @@ del sistema y el proceso se llama Atalaya.
   `tools\make-icon.ps1`.
 - `winctl show-panel -Hash ajustes` y soporte de `#ajustes` en el panel: la
   opción "Ajustes" del menú de la bandeja lo abre directo en esa sección.
+- **Actualización automática**: el hub consulta a `origin` cada 12 h (sección
+  `update` de `config.json` para ajustarlo o apagarlo) y, cuando hay versión
+  nueva, aparece un botón `⬆ Actualizar a vX.Y.Z` en la cabecera del panel y
+  en el menú de la bandeja. `atalaya -Update` hace lo mismo desde la terminal;
+  `-Check` solo informa. Actualizar = detener todo → `git merge --ff-only` →
+  recompilar el ejecutable → rehacer accesos directos y registro → reintegrar
+  los hooks → arrancar de nuevo, con toast al terminar. **Nunca pisa trabajo
+  local**: si el clone tiene cambios sin guardar o commits propios, se detiene
+  y lo explica.
+- **Desinstalación desde Windows**: Atalaya se registra en "Configuración →
+  Aplicaciones → Aplicaciones instaladas", con icono y botón Desinstalar
+  (clave por usuario, sin permisos de administrador). Nuevo
+  `-Uninstall -RemoveFiles` para borrar también la carpeta instalada.
 
 ### Cambiado
 - Los **toasts** salen a nombre de "Atalaya" (con su icono) en vez de "Windows
@@ -42,8 +55,17 @@ del sistema y el proceso se llama Atalaya.
 - `-InstallAutostart` y el reinicio del HUD desde el panel usan `Atalaya.exe`
   cuando existe.
 - El `-Doctor` informa del ejecutable, del icono, del acceso directo del menú
-  Inicio y de si el HUD está corriendo bajo la identidad de Atalaya.
-- `-Uninstall` retira también el acceso directo del menú Inicio.
+  Inicio, del registro de aplicación instalada, de si hay canal de
+  actualizaciones y de si el HUD está corriendo bajo la identidad de Atalaya.
+- `-Uninstall` retira también el acceso directo del menú Inicio y el registro
+  de "Aplicaciones instaladas".
+
+### Corregido
+- **La píldora podía quedar en un sitio invisible.** Con monitores de distinto
+  tamaño, el rectángulo que los engloba tiene zonas sin pantalla, y la
+  validación de la posición guardada solo comprobaba ese rectángulo. Ahora se
+  mide contra los monitores reales (`MonitorFromRect`) exigiendo que al menos
+  la mitad quede visible, y si no, la píldora se recentra sola al arrancar.
 
 ## [0.14.0] - 2026-07-18
 

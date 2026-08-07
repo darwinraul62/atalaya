@@ -37,6 +37,7 @@ const LABELS_FILE = path.join(STATE_DIR, "labels.json");
 const ICONS_DIR = path.join(STATE_DIR, "icons");
 const CONFIG_FILE = path.join(STATE_DIR, "config.json");
 const PINS_FILE = path.join(STATE_DIR, "pins.json");
+const UPDATE_FILE = path.join(STATE_DIR, "update.json");
 const HUD_PS1 = path.join(REPO_ROOT, "scripts", "hud.ps1");
 const HOST_EXE = path.join(REPO_ROOT, "bin", "Atalaya.exe");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
@@ -509,6 +510,92 @@ function saveNotes(notes) {
   fs.writeFileSync(NOTES_FILE, JSON.stringify(notes, null, 2));
 }
 
+// ── Actualizaciones ─────────────────────────────────────────────────────────
+// La instalación es un clone de git, así que "¿hay versión nueva?" se responde
+// preguntándole al propio remoto (git fetch + cuántos commits faltan). Se evita
+// así depender de la API de GitHub, de tokens y de sus límites de peticiones.
+// El resultado se cachea en disco para que el panel lo tenga al instante.
+
+function readConfig() {
+  try {
+    const cfg = JSON.parse(fs.readFileSync(CONFIG_FILE, "utf8"));
+    return cfg && typeof cfg === "object" ? cfg : {};
+  } catch {
+    return {};
+  }
+}
+
+let updateInfo = { available: false, behind: 0, tag: null, checkedAt: null, error: null };
+try {
+  const cached = JSON.parse(fs.readFileSync(UPDATE_FILE, "utf8"));
+  if (cached && typeof cached === "object") updateInfo = { ...updateInfo, ...cached };
+} catch {
+  /* primera vez */
+}
+
+function git(args, cb) {
+  execFile("git", ["-C", REPO_ROOT, ...args], { windowsHide: true, timeout: 30000 }, cb);
+}
+
+function checkUpdate(cb = () => {}) {
+  git(["rev-parse", "--is-inside-work-tree"], (notRepo) => {
+    if (notRepo) {
+      updateInfo = { ...updateInfo, available: false, error: "no es un clone de git" };
+      return cb(updateInfo);
+    }
+    git(["fetch", "--quiet", "--tags", "origin"], (errFetch) => {
+      if (errFetch) {
+        // Sin red, o remoto inaccesible: no es un fallo del que informar al
+        // usuario, solo se reintentará en el siguiente ciclo.
+        updateInfo = { ...updateInfo, checkedAt: new Date().toISOString(), error: "sin conexión con origin" };
+        saveUpdateInfo();
+        return cb(updateInfo);
+      }
+      git(["rev-list", "--count", "HEAD..@{u}"], (errCount, out) => {
+        if (errCount) {
+          updateInfo = { ...updateInfo, available: false, error: "la rama no sigue a origin" };
+          saveUpdateInfo();
+          return cb(updateInfo);
+        }
+        const behind = Number(String(out).trim()) || 0;
+        git(["describe", "--tags", "--abbrev=0", "@{u}"], (_e, tagOut) => {
+          updateInfo = {
+            available: behind > 0,
+            behind,
+            tag: String(tagOut || "").trim() || null,
+            checkedAt: new Date().toISOString(),
+            error: null,
+          };
+          saveUpdateInfo();
+          if (behind > 0) log(`actualización disponible: ${behind} commit(s), ${updateInfo.tag || "sin etiqueta"}`);
+          scheduleBroadcast();
+          cb(updateInfo);
+        });
+      });
+    });
+  });
+}
+
+function saveUpdateInfo() {
+  try {
+    fs.writeFileSync(UPDATE_FILE, JSON.stringify(updateInfo, null, 2));
+  } catch {
+    /* sin caché */
+  }
+}
+
+// Lanza el actualizador. Tiene que sobrevivir a que este mismo proceso muera
+// (lo primero que hace es detener hub y HUD), de ahí detached + unref.
+function runUpdate() {
+  const child = spawn("powershell.exe", [...PS_ARGS, path.join(REPO_ROOT, "atalaya.ps1"), "-Update"], {
+    detached: true,
+    stdio: "ignore",
+    windowsHide: true,
+  });
+  child.unref();
+  log("actualización lanzada");
+}
+
 // ── Payload y resumen ───────────────────────────────────────────────────────
 
 function buildPayload() {
@@ -521,6 +608,7 @@ function buildPayload() {
     currentDesktop,
     // El panel se auto-recarga cuando el hub cambia de versión (JS obsoleto)
     hubVersion: VERSION,
+    update: updateInfo,
   };
 }
 
@@ -540,6 +628,9 @@ function buildSummary(payload) {
       ? `${urgent.label || urgent.project}: ${urgent.message || urgent.task || "requiere tu atención"}`
       : null,
     generatedAt: payload.generatedAt,
+    update: updateInfo.available
+      ? { available: true, behind: updateInfo.behind, tag: updateInfo.tag }
+      : null,
   };
 }
 
@@ -841,6 +932,24 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  // ── Actualizaciones ───────────────────────────────────────────────────────
+  if (route === "GET /api/update") {
+    return json(res, 200, { ...updateInfo, version: VERSION });
+  }
+
+  if (route === "POST /api/update/check") {
+    return checkUpdate((info) => json(res, 200, { ...info, version: VERSION }));
+  }
+
+  if (route === "POST /api/update/run") {
+    if (process.platform !== "win32") return json(res, 409, { error: "solo Windows" });
+    // Se responde ANTES de lanzar: el actualizador mata este proceso enseguida
+    // y el cliente se quedaría esperando una respuesta que ya no llegaría.
+    json(res, 200, { ok: true });
+    setTimeout(runUpdate, 300);
+    return;
+  }
+
   // Configuración del usuario (hotkeys, píldora). El HUD la lee al arrancar:
   // tras guardar hay que reiniciarlo (POST /api/hud/restart).
   if (route === "GET /api/config") {
@@ -902,6 +1011,14 @@ const server = http.createServer(async (req, res) => {
       if (body.pomodoro.breakMin !== undefined) {
         const n = Number(body.pomodoro.breakMin);
         cfg.pomodoro.breakMin = Number.isInteger(n) && n >= 1 && n <= 60 ? n : 5;
+      }
+    }
+    if (body.update && typeof body.update === "object") {
+      cfg.update = { ...cfg.update };
+      if (body.update.check !== undefined) cfg.update.check = !!body.update.check;
+      if (body.update.intervalHours !== undefined) {
+        const n = Number(body.update.intervalHours);
+        cfg.update.intervalHours = Number.isInteger(n) && n >= 1 && n <= 168 ? n : 12;
       }
     }
     try {
@@ -1192,6 +1309,15 @@ server.listen(PORT, "127.0.0.1", () => {
   purgeOldSessions();
   setInterval(purgeOldSessions, 3600e3);
   watchState();
+  // Comprobación de actualizaciones: se puede apagar con
+  // { "update": { "check": false } } en config.json. La primera va con retraso
+  // para no competir con el arranque del HUD.
+  const upCfg = (readConfig().update) || {};
+  if (upCfg.check !== false) {
+    const hours = Math.min(168, Math.max(1, Number(upCfg.intervalHours) || 12));
+    setTimeout(() => checkUpdate(), 60e3);
+    setInterval(() => checkUpdate(), hours * 3600e3);
+  }
   // Estado inicial para las transiciones de toast (sin notificar lo ya existente)
   for (const s of buildPayload().sessions) prevStatus.set(s.sessionId, s.status);
 });
