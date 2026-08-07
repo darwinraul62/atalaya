@@ -11,11 +11,14 @@
 #   atalaya.cmd -Uninstall         retira hooks, autostart y PATH; -PurgeState
 #                                  borra ademas el estado (~/.atalaya)
 #   atalaya.cmd -InstallAutostart  arranca Atalaya al iniciar sesion de Windows
+#   atalaya.cmd -InstallShortcuts  crea el acceso directo del menu Inicio (para
+#                                  buscar "Atalaya" y anclarlo a la barra)
 param(
     [switch]$Panel,
     [switch]$Stop,
     [switch]$Status,
     [switch]$InstallAutostart,
+    [switch]$InstallShortcuts,
     [switch]$Setup,
     [switch]$Integrate,
     [switch]$Doctor,
@@ -27,7 +30,34 @@ $ErrorActionPreference = "SilentlyContinue"
 $RepoRoot = $PSScriptRoot
 $StateDir = Join-Path $env:USERPROFILE ".atalaya"
 $HubUrl = "http://127.0.0.1:4777"
+# Anfitrion nativo: cuando existe, el HUD corre dentro de un proceso llamado
+# "Atalaya" con su propio icono, en vez de aparecer como "Windows PowerShell".
+$HostExe = Join-Path $RepoRoot "bin\Atalaya.exe"
+$StartMenuLnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Atalaya.lnk"
 New-Item -ItemType Directory -Force -Path (Join-Path $StateDir "sessions") | Out-Null
+
+# Compila bin\Atalaya.exe si falta o quedo viejo. $true si esta listo.
+function Build-Host {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+        -File (Join-Path $RepoRoot "tools\build-host.ps1") | Out-Null
+    return (Test-Path $HostExe)
+}
+
+# Los accesos directos los crea el propio exe: hay que grabarles el
+# AppUserModelID y WScript.Shell -lo unico que sabe hacer .lnk desde
+# PowerShell- no puede escribir esa propiedad.
+function Install-Shortcuts([bool]$WithAutostart) {
+    if (-not (Test-Path $HostExe)) {
+        if (-not (Build-Host)) {
+            Write-Host "[x] No pude compilar bin\Atalaya.exe; sin el no hay acceso directo con identidad propia."
+            return $false
+        }
+    }
+    $lnkArgs = @("--install-shortcut")
+    if ($WithAutostart) { $lnkArgs += "--autostart" }
+    & $HostExe @lnkArgs
+    return (Test-Path $StartMenuLnk)
+}
 
 function Get-Http([string]$url) {
     try {
@@ -131,17 +161,33 @@ if ($Status) {
     exit 0
 }
 
+if ($InstallShortcuts) {
+    if (Install-Shortcuts $false) {
+        Write-Host ""
+        Write-Host "Listo: busca 'Atalaya' en el menu Inicio. Clic derecho sobre el"
+        Write-Host "resultado para anclarlo a Inicio o a la barra de tareas."
+    }
+    exit 0
+}
+
 if ($InstallAutostart) {
-    $startup = [Environment]::GetFolderPath("Startup")
-    $lnkPath = Join-Path $startup "Atalaya.lnk"
+    $lnkPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
+    # Con el anfitrion nativo el autoarranque tambien apunta a Atalaya.exe (asi
+    # el proceso que queda vivo se llama Atalaya); si no se pudo compilar,
+    # seguimos con el metodo clasico via powershell.exe.
+    if (Install-Shortcuts $true) {
+        Write-Host "Autoarranque instalado: $lnkPath"
+        exit 0
+    }
     $shell = New-Object -ComObject WScript.Shell
     $lnk = $shell.CreateShortcut($lnkPath)
     $lnk.TargetPath = "powershell.exe"
     $lnk.Arguments = "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RepoRoot\atalaya.ps1`""
     $lnk.WorkingDirectory = $RepoRoot
     $lnk.Description = "Atalaya - monitor de sesiones de agentes"
+    $lnk.IconLocation = (Join-Path $RepoRoot "assets\atalaya.ico")
     $lnk.Save()
-    Write-Host "Autoarranque instalado: $lnkPath"
+    Write-Host "Autoarranque instalado: $lnkPath (sin identidad propia: falta bin\Atalaya.exe)"
     exit 0
 }
 
@@ -165,7 +211,29 @@ if ($Doctor) {
     if (Test-Hub) { Write-Host "[+] Hub: activo en $HubUrl" }
     else { Write-Host "[-] Hub: no responde (arranca con: atalaya)" }
     $hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid")
-    if ($hudPid) { Write-Host "[+] HUD: activo (pid $hudPid)" } else { Write-Host "[-] HUD: detenido" }
+    if ($hudPid) {
+        $hudProc = (Get-Process -Id $hudPid -ErrorAction SilentlyContinue).ProcessName
+        Write-Host "[+] HUD: activo (pid $hudPid, proceso '$hudProc')"
+        if ($hudProc -ne "Atalaya") {
+            Write-Host "    [-] corriendo bajo PowerShell: reinicia el HUD para que tome la identidad de Atalaya"
+        }
+    } else { Write-Host "[-] HUD: detenido" }
+    if (Test-Path $HostExe) {
+        $hv = (Get-Item $HostExe).VersionInfo.FileVersion
+        Write-Host "[+] Atalaya.exe: presente (v$hv) - el HUD corre como aplicacion propia"
+    } else {
+        Write-Host "[-] Atalaya.exe: falta (compila con tools\build-host.ps1); el HUD saldra como 'Windows PowerShell'"
+    }
+    if (Test-Path (Join-Path $RepoRoot "assets\atalaya.ico")) {
+        Write-Host "[+] Icono: assets\atalaya.ico"
+    } else {
+        Write-Host "[-] Icono: falta assets\atalaya.ico (genera con tools\make-icon.ps1)"
+    }
+    if (Test-Path $StartMenuLnk) {
+        Write-Host "[+] Menu Inicio: 'Atalaya' es buscable y anclable; los toasts salen a su nombre"
+    } else {
+        Write-Host "[-] Menu Inicio: sin acceso directo (atalaya -InstallShortcuts)"
+    }
     if (Test-Path (Join-Path $RepoRoot "tools\VirtualDesktop.exe")) {
         Write-Host "[+] VirtualDesktop.exe: presente (salto entre escritorios habilitado)"
     } else {
@@ -198,6 +266,8 @@ if ($Uninstall) {
     $lnkPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
     if (Test-Path $lnkPath) { Remove-Item $lnkPath -Force; Write-Host "[+] Autoarranque retirado" }
     else { Write-Host "[-] Autoarranque: no estaba instalado" }
+    if (Test-Path $StartMenuLnk) { Remove-Item $StartMenuLnk -Force; Write-Host "[+] Acceso directo del menu Inicio retirado" }
+    else { Write-Host "[-] Menu Inicio: no habia acceso directo" }
     if (Remove-RepoFromPath) { Write-Host "[+] Repo retirado del PATH de usuario" }
     else { Write-Host "[-] PATH de usuario: no incluia el repo" }
     if ($PurgeState) {
@@ -230,6 +300,13 @@ if ($Setup) {
         if (Test-Path $vdExe) { Write-Host "[+] VirtualDesktop.exe: compilado" }
         else { Write-Host "[-] VirtualDesktop.exe: no se pudo compilar; el salto de escritorio queda limitado (reintenta con tools\get-virtualdesktop.ps1)" }
     }
+
+    if (Build-Host) { Write-Host "[+] Atalaya.exe: listo (el HUD corre como aplicacion propia)" }
+    else { Write-Host "[-] Atalaya.exe: no se pudo compilar; el HUD funcionara igual, pero como 'Windows PowerShell'" }
+
+    Write-Host "... Registrando Atalaya en el menu Inicio"
+    if (Install-Shortcuts $false) { Write-Host "[+] Menu Inicio: buscable como 'Atalaya' y anclable a la barra de tareas" }
+    else { Write-Host "[-] Menu Inicio: no se pudo crear el acceso directo" }
 
     Write-Host "... Integrando agentes (Claude Code, Codex; Windows + WSL)"
     Invoke-Integrate @()
@@ -292,9 +369,13 @@ if ($hudPid) {
     Write-Host "HUD: ya activo (pid $hudPid)"
 } else {
     Write-Host "Arrancando HUD..."
-    Start-Process -FilePath "powershell.exe" `
-        -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RepoRoot\scripts\hud.ps1`"" `
-        -WindowStyle Hidden
+    if (Test-Path $HostExe) {
+        Start-Process -FilePath $HostExe -ArgumentList "--hud" -WorkingDirectory $RepoRoot
+    } else {
+        Start-Process -FilePath "powershell.exe" `
+            -ArgumentList "-NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File `"$RepoRoot\scripts\hud.ps1`"" `
+            -WindowStyle Hidden
+    }
 }
 
 if ($Panel) {

@@ -54,12 +54,29 @@ atalaya.cmd -Panel             :: además abre el panel completo
 atalaya.cmd -Status            :: estado de hub y HUD
 atalaya.cmd -Stop              :: detiene todo
 atalaya.cmd -InstallAutostart  :: arrancar con Windows
+atalaya.cmd -InstallShortcuts  :: registrarlo en el menú Inicio
 atalaya.cmd -Doctor            :: informe de salud (ver Instalación para más)
 ```
 
 (Tras `-Setup`, el comando `atalaya` queda en el PATH: sirve igual desde
 cualquier terminal, sin el `.cmd` ni la ruta.)
 
+- **Icono en la bandeja del sistema** (junto al reloj): el ancla permanente.
+  La píldora flota y se puede perder — otro monitor, otro escritorio, detrás
+  de una ventana a pantalla completa —, pero el icono está **siempre en el
+  mismo sitio**.
+  - **Clic** = rescatar la píldora: la trae al escritorio actual y al frente;
+    si de verdad quedó fuera de la pantalla (o la habías ocultado), la
+    **recentra**. Un clic accidental no te descoloca la píldora.
+  - **Doble clic** = abrir el panel.
+  - **Clic derecho** = menú completo, con el resumen en vivo arriba
+    (`2 te necesitan · 1 trabajando · 3 listas`) y todas las acciones
+    importantes con su atajo escrito al lado: recentrar la píldora,
+    mostrarla/ocultarla, abrir el panel, ir a la sesión que te necesita,
+    deck, pomodoro, apartar ventana, Ajustes, reiniciar y salir.
+  - **Ocultar la píldora** deja Atalaya funcionando entero (atajos, toasts,
+    alertas vistas) sin nada flotando en pantalla: se maneja desde la bandeja.
+    La preferencia se recuerda entre reinicios.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
   clic y estás ahí. El actual se marca con ◉ (y fondo resaltado); el que pide
   atención va en ámbar con 🔔; el que tiene **trabajo en progreso** muestra ⚙
@@ -157,6 +174,9 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Mostrar/ocultar el deck |
 
+  > ¿Perdiste la píldora y no recuerdas el atajo? Clic en el icono de la
+  > **bandeja del sistema**: no hay nada que memorizar.
+
   La lista siempre a mano: vista **[?]** del deck (pasa el mouse por la
   píldora).
 
@@ -213,11 +233,12 @@ cd atalaya
 atalaya.cmd -Setup
 ```
 
-El setup verifica los requisitos, compila `tools\VirtualDesktop.exe`, crea
-`workspaces.json` desde el ejemplo, **integra los agentes detectados**
-(Claude Code y Codex, en Windows y en cada distro WSL, con backup de cada
-archivo tocado), agrega el comando `atalaya` al PATH del usuario y deja
-hub + HUD corriendo. Es idempotente: re-ejecutarlo nunca duplica nada.
+El setup verifica los requisitos, compila `tools\VirtualDesktop.exe` y
+`bin\Atalaya.exe`, crea `workspaces.json` desde el ejemplo, **integra los
+agentes detectados** (Claude Code y Codex, en Windows y en cada distro WSL,
+con backup de cada archivo tocado), registra Atalaya en el **menú Inicio**,
+agrega el comando `atalaya` al PATH del usuario y deja hub + HUD corriendo.
+Es idempotente: re-ejecutarlo nunca duplica nada.
 
 Comandos de mantenimiento:
 
@@ -233,8 +254,38 @@ hooks.
 
 Qué toca fuera del repo (y nada más): `~/.claude/settings.json` (Windows y
 WSL), `~/.codex/config.toml` (Windows y WSL) — ambos con backup previo —,
-`%USERPROFILE%\.atalaya\` (estado), el PATH del usuario y, si usas
-`-InstallAutostart`, un acceso directo en la carpeta Inicio.
+`%USERPROFILE%\.atalaya\` (estado), el PATH del usuario, un acceso directo
+`Atalaya.lnk` en el menú Inicio y, si usas `-InstallAutostart`, otro en la
+carpeta Inicio (arranque automático).
+
+### Atalaya como aplicación de Windows
+
+Atalaya se presenta como una app normal, no como un script suelto:
+
+- **`bin\Atalaya.exe`** — anfitrión nativo que ejecuta el HUD **dentro de su
+  propio proceso**. Por eso el Administrador de tareas y la barra de tareas
+  muestran **Atalaya** con su icono, y no "Windows PowerShell". Se compila en
+  el `-Setup` con el `csc.exe` que ya trae Windows (.NET Framework 4.x): no
+  hace falta instalar ningún SDK. Es un artefacto de build, no se versiona.
+  - Modos: sin argumentos = lanzador (hub + HUD) · `--hud` = hospeda el HUD ·
+    `--install-shortcut [--autostart]` = accesos directos ·
+    `--run <script.ps1>` = diagnóstico.
+  - Si por lo que sea no se puede compilar, **nada se rompe**: el HUD arranca
+    como antes con `powershell.exe`, solo que sin identidad propia. El
+    `-Doctor` lo avisa.
+- **Menú Inicio** (`atalaya -InstallShortcuts`): busca "Atalaya" y ahí está;
+  clic derecho sobre el resultado para **anclarlo** a Inicio o a la barra de
+  tareas. El acceso directo lleva grabado el `AppUserModelID` `Atalaya.Monitor`
+  — por eso también los **toasts** salen a nombre de "Atalaya" con su icono,
+  en vez de a nombre de PowerShell.
+- **Icono**: `assets\atalaya.ico` (multi-resolución, 16→256 px). Se genera por
+  código con `tools\make-icon.ps1` (`-Preview` escribe una hoja de contacto
+  para revisarlo sobre fondo claro y oscuro).
+
+> **Windows 11 esconde los iconos nuevos de la bandeja.** Si no ves el de
+> Atalaya, despliega la flecha **^** de la barra de tareas y **arrástralo**
+> fuera, o ve a *Configuración → Personalización → Barra de tareas → Otros
+> iconos de la bandeja del sistema* y activa **Atalaya**.
 
 ### Anclar el HUD a todos los escritorios virtuales
 

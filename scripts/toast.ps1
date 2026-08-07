@@ -21,8 +21,16 @@ try {
     $doc.LoadXml($xml)
     $toast = New-Object Windows.UI.Notifications.ToastNotification($doc)
 
-    # AppId de PowerShell: existe en todo Windows, no requiere registrar una app.
-    $appId = '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+    # Windows solo acepta un AppId que este respaldado por un acceso directo del
+    # menu Inicio con esa propiedad (System.AppUserModel.ID). Si Atalaya lo tiene
+    # instalado, el toast sale a nombre de "Atalaya" y con su icono; si no,
+    # usamos el AppId de PowerShell, que existe en todos los Windows.
+    $ownLnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Atalaya.lnk"
+    $appId = if (Test-Path $ownLnk) {
+        'Atalaya.Monitor'
+    } else {
+        '{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe'
+    }
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($appId).Show($toast)
 } catch {
     try {

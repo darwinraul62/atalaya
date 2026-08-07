@@ -21,7 +21,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.14.0";
+const VERSION = "0.15.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -38,8 +38,18 @@ const ICONS_DIR = path.join(STATE_DIR, "icons");
 const CONFIG_FILE = path.join(STATE_DIR, "config.json");
 const PINS_FILE = path.join(STATE_DIR, "pins.json");
 const HUD_PS1 = path.join(REPO_ROOT, "scripts", "hud.ps1");
+const HOST_EXE = path.join(REPO_ROOT, "bin", "Atalaya.exe");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
 const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File"];
+
+// Cómo arrancar el HUD. Con bin\Atalaya.exe el proceso se llama "Atalaya" y
+// lleva su icono (barra de tareas, Administrador de tareas, notificaciones);
+// sin él se cae al método de siempre, powershell.exe, que funciona igual pero
+// sin identidad propia.
+function hudLaunchCommand() {
+  if (fs.existsSync(HOST_EXE)) return [HOST_EXE, ["--hud"]];
+  return ["powershell.exe", [...PS_ARGS, HUD_PS1]];
+}
 
 const STALE_HOURS = 12; // sesiones sin actividad más antiguas no se muestran
 const PURGE_HOURS = 72; // fichas más antiguas se borran del disco
@@ -915,11 +925,8 @@ const server = http.createServer(async (req, res) => {
       setTimeout(() => {
         // OJO: sin detached — en Windows separa al hijo de la consola y
         // powershell+WPF muere al arrancar. El hijo sobrevive al hub igual.
-        const child = spawn(
-          "powershell.exe",
-          ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hidden", "-File", HUD_PS1],
-          { stdio: "ignore", windowsHide: true }
-        );
+        const [hudCmd, hudArgs] = hudLaunchCommand();
+        const child = spawn(hudCmd, hudArgs, { stdio: "ignore", windowsHide: true });
         child.unref();
       }, 500);
       return json(res, 200, { ok: true });

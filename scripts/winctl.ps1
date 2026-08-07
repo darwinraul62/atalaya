@@ -4,7 +4,8 @@
 #   -Action focus -Hwnd <n>         cambia al escritorio de la ventana (si hay
 #                                   VirtualDesktop.exe) y la enfoca; JSON {ok}
 #   -Action show-panel [-Toggle]    trae el panel al escritorio actual o lo lanza;
-#                                   con -Toggle lo minimiza si ya esta al frente
+#                                   con -Toggle lo minimiza si ya esta al frente;
+#                                   con -Hash ajustes lo abre en esa seccion
 #   -Action windows                 imprime JSON [{hwnd,pid,proc,title}] de todas
 #                                   las ventanas visibles normales (sin tool
 #                                   windows ni UWP ocultas)
@@ -17,6 +18,7 @@ param(
     [int]$ProcId = 0,
     [switch]$Toggle,
     [switch]$Max,
+    [string]$Hash = "",
     [string]$HubUrl = "http://127.0.0.1:4777"
 )
 
@@ -149,9 +151,13 @@ switch ($Action) {
         if ($h -eq 0) {
             # URL unica por lanzamiento: Edge no puede reutilizar HTML cacheado
             $bust = [DateTime]::UtcNow.Ticks
-            $edgeArgs = "--app=$HubUrl/?v=$bust"
+            # -Hash abre el panel en una seccion concreta (p. ej. "ajustes");
+            # solo aplica al lanzar: si la ventana ya existe se la enfoca tal
+            # como este.
+            $frag = if ($Hash) { "#$Hash" } else { "" }
+            $edgeArgs = "--app=$HubUrl/?v=$bust$frag"
             if ($Max) { $edgeArgs = "--start-maximized $edgeArgs" }
-            try { Start-Process "msedge" $edgeArgs } catch { Start-Process "$HubUrl/?v=$bust" }
+            try { Start-Process "msedge" $edgeArgs } catch { Start-Process "$HubUrl/?v=$bust$frag" }
             Write-Output '{"ok":true,"launched":true}'
             break
         }

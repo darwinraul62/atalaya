@@ -7,11 +7,17 @@
 # - Hotkeys globales (config.json): panel, salto urgente, escritorios,
 #   favorito, apartar ventana de la pildora y pomodoro
 # - Reporta la ventana activa al hub para apagar alertas ya leidas
-# Ejecutar con powershell.exe (STA por defecto). Solo caracteres ASCII en este
-# archivo: PowerShell 5.1 no lee bien UTF-8 sin BOM.
+# - Icono en la bandeja del sistema (junto al reloj) con menu completo: es el
+#   ancla permanente de la app, y desde ahi se recupera la pildora si se pierde
+# Ejecutar con bin\Atalaya.exe --hud (o powershell.exe, que tambien es STA).
+# Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin
+# BOM.
 
 $ErrorActionPreference = "SilentlyContinue"
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
+# WinForms/Drawing: unicamente para el icono de la bandeja (NotifyIcon), que no
+# tiene equivalente en WPF.
+Add-Type -AssemblyName System.Windows.Forms, System.Drawing
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;
@@ -29,6 +35,32 @@ public static class AtalayaHotkey {
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint flags);
 
     public static long Foreground() { return GetForegroundWindow().ToInt64(); }
+
+    [StructLayout(LayoutKind.Sequential)]
+    public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromRect(ref RECT r, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
+
+    // Hay ventana en un sitio DONDE SE VE? Con varios monitores de distinto
+    // tamanio, el rectangulo que los engloba tiene huecos muertos: una
+    // posicion puede estar "dentro de los limites" y aun asi no caer en
+    // ninguna pantalla (asi es como se pierde la pildora). Se mide contra los
+    // monitores reales y se exige que al menos la mitad quede visible.
+    public static bool OnScreen(long h) {
+        IntPtr w = new IntPtr(h);
+        RECT r;
+        if (!GetWindowRect(w, out r)) return true;   // ante la duda, no tocar
+        IntPtr mon = MonitorFromRect(ref r, 0);      // MONITOR_DEFAULTTONULL
+        if (mon == IntPtr.Zero) return false;
+        MONITORINFO mi = new MONITORINFO();
+        mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+        if (!GetMonitorInfo(mon, ref mi)) return true;
+        long iw = Math.Max(0, Math.Min(r.R, mi.rcWork.R) - Math.Max(r.L, mi.rcWork.L));
+        long ih = Math.Max(0, Math.Min(r.B, mi.rcWork.B) - Math.Max(r.T, mi.rcWork.T));
+        long area = (long)(r.R - r.L) * (r.B - r.T);
+        if (area <= 0) return true;
+        return iw * ih * 2 >= area;
+    }
 
     // Reafirma el topmost sin activar ni mover: algunas apps (instaladores,
     // overlays, otras topmost) dejan a la pildora por debajo hasta esto.
@@ -78,6 +110,7 @@ $StateDir = Join-Path $env:USERPROFILE ".atalaya"
 $PosFile  = Join-Path $StateDir "hud.json"
 $LogFile  = Join-Path $StateDir "hub.log"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
+$IconFile = Join-Path $RepoRoot "assets\atalaya.ico"
 
 # Configuracion en ~/.atalaya/config.json (editable tambien desde el panel,
 # seccion Ajustes; "none" desactiva un atajo; reiniciar el HUD para aplicar):
@@ -212,6 +245,17 @@ $txtPomo  = $window.FindName("TxtPomo")
 $btnDeck  = $window.FindName("BtnDeck")
 $btnPanel = $window.FindName("BtnPanel")
 
+# Icono propio: es lo que ve Alt+Tab, la barra de tareas y el Administrador de
+# tareas. Sin esto la ventana hereda el icono generico del anfitrion.
+try {
+    if (Test-Path $IconFile) {
+        $window.Icon = [Windows.Media.Imaging.BitmapFrame]::Create(
+            (New-Object Uri $IconFile),
+            [Windows.Media.Imaging.BitmapCreateOptions]::None,
+            [Windows.Media.Imaging.BitmapCacheOption]::OnLoad)
+    }
+} catch { }
+
 # Preferencias de presentacion de la pildora
 $window.ShowInTaskbar = [bool]$PillTaskbar
 $Vertical = $PillLayout -eq "v"
@@ -324,16 +368,22 @@ if ($PillCorner) {
 
 $script:DeckPinned = $false
 $script:DeckView = "desks"   # "desks" (por escritorio) o "pins" (importantes)
+# Pildora oculta: Atalaya sigue vivo y con todos sus atajos, pero sin nada
+# flotando en pantalla. Solo tiene sentido porque el icono de la bandeja queda
+# como puerta de entrada permanente.
+$script:PillHidden = $false
 try {
     $prefs = Get-Content $PosFile -Raw | ConvertFrom-Json
     if ($prefs.deckPinned) { $script:DeckPinned = $true }
     if ($prefs.deckView -eq "pins") { $script:DeckView = "pins" }
+    if ($prefs.pillHidden) { $script:PillHidden = $true }
 } catch { }
 
 function Save-Position {
     try {
         @{ left = $window.Left; top = $window.Top
-           deckPinned = $script:DeckPinned; deckView = $script:DeckView } |
+           deckPinned = $script:DeckPinned; deckView = $script:DeckView
+           pillHidden = $script:PillHidden } |
             ConvertTo-Json | Set-Content -Path $PosFile
     } catch { }
 }
@@ -451,6 +501,7 @@ function Update-Hud {
         Set-PillOpacity
         $window.ToolTip = "Atalaya: hub sin conexion (ejecuta atalaya.cmd)"
         $script:LastSummary = $null
+        Update-TrayStatus $null
         Update-Deck $null
         return
     }
@@ -556,6 +607,7 @@ function Update-Hud {
 
     $window.ToolTip = if ($s.urgent) { "Atiende: $($s.urgent)" } else { $null }
     $script:LastSummary = $s
+    Update-TrayStatus $s
     Update-Deck $s
     Set-CornerPosition
 }
@@ -1146,11 +1198,94 @@ function Assert-Topmost {
     if ($script:DeckHwnd -and $deck.IsVisible) { [AtalayaHotkey]::AssertTopmost($script:DeckHwnd) }
 }
 
+# Mostrar/ocultar la pildora. Ocultarla NO detiene nada: hotkeys, toasts y
+# vigilancia siguen corriendo; la app se maneja desde la bandeja.
+function Show-Pill {
+    $script:PillHidden = $false
+    try { $window.Show(); $window.Opacity = 1.0 } catch { }
+    if ($script:PillHwnd) { [AtalayaHotkey]::AssertTopmost($script:PillHwnd) }
+    Update-TrayMenuState
+    Save-Position
+}
+
+function Hide-Pill {
+    $script:PillHidden = $true
+    Hide-Deck
+    try { $window.Hide() } catch { }
+    Update-TrayMenuState
+    Save-Position
+}
+
+function Toggle-Pill {
+    if ($script:PillHidden) { Show-Pill } else { Hide-Pill }
+}
+
+# Rescate desde la bandeja (clic simple). Conserva la posicion elegida por el
+# usuario salvo que la pildora este realmente inalcanzable: solo entonces la
+# recentra. Asi un clic accidental no le desordena el escritorio.
+function Rescue-Pill {
+    if ($script:PillHidden) { Show-Pill; Move-PillHome; return }
+    if ($script:PillHwnd -and -not [AtalayaHotkey]::OnScreen($script:PillHwnd)) {
+        Move-PillHome
+        return
+    }
+    # Esta en pantalla: la traemos al escritorio actual, al frente y opaca.
+    Pin-ToAllDesktops
+    $window.Opacity = 1.0
+    if ($script:PillHwnd) { [AtalayaHotkey]::AssertTopmost($script:PillHwnd) }
+}
+
+# Refleja en el menu de la bandeja el estado que puede haber cambiado por otra
+# via (hotkey, menu de la pildora).
+function Update-TrayMenuState {
+    try {
+        if ($script:TrayPillToggle) {
+            $script:TrayPillToggle.Text = if ($script:PillHidden) { "Mostrar la pildora" } else { "Ocultar la pildora" }
+        }
+    } catch { }
+}
+
+function Open-PanelSettings { Invoke-WinCtl "-Action show-panel -Hash ajustes -HubUrl $HubUrl" }
+
+# Salir del todo: HUD y hub. Sin el hub dejan de registrarse las sesiones, asi
+# que el menu lo dice con esas palabras y ofrece aparte cerrar solo el HUD.
+function Exit-Atalaya {
+    try {
+        $hubPidFile = Join-Path $StateDir "hub.pid"
+        $hubPid = [int](Get-Content $hubPidFile -Raw -ErrorAction Stop)
+        Stop-Process -Id $hubPid -Force -ErrorAction SilentlyContinue
+        Write-HudLog "salida completa: hub detenido (pid $hubPid)"
+    } catch { }
+    $window.Close()
+}
+
+# Resumen del estado en el icono de la bandeja: el tooltip de NotifyIcon admite
+# 63 caracteres como maximo, asi que va abreviado; la primera linea del menu
+# lleva el texto completo.
+function Update-TrayStatus($s) {
+    try {
+        if ($null -eq $s) {
+            $script:Tray.Text = "Atalaya - hub sin conexion"
+            $script:TrayStatus.Text = "Atalaya - hub sin conexion"
+            return
+        }
+        $short = "Atalaya - $($s.needs_you)/$($s.working)/$($s.ready)"
+        if ($short.Length -gt 63) { $short = $short.Substring(0, 63) }
+        $script:Tray.Text = $short
+        $full = "$($s.needs_you) te necesitan - $($s.working) trabajando - $($s.ready) listas"
+        if ($s.urgent) { $full += " | Atiende: $($s.urgent)" }
+        $script:TrayStatus.Text = $full
+    } catch { }
+}
+
 # Recentrar la pildora: traerla a un punto predecible de la pantalla
 # principal cuando quedo en una zona dificil de ver o fuera de los limites
 # (arrastre a otro monitor, cambio de resolucion, etc.). Con esquina fija va
 # a su esquina; con posicion libre, abajo al centro.
 function Move-PillHome {
+    # Si estaba oculta, "recentrar" tiene que devolverla a la vista: es el
+    # gesto de rescate y no debe fallar en silencio.
+    if ($script:PillHidden) { Show-Pill }
     if ($PillCorner) {
         Set-CornerPosition
     } else {
@@ -1229,6 +1364,9 @@ $miPomo.Add_Click({ Toggle-Pomodoro })
 $miHome = New-Object System.Windows.Controls.MenuItem
 $miHome.Header = "Recentrar la pildora"; $miHome.InputGestureText = $Hotkeys.recenterPill
 $miHome.Add_Click({ Move-PillHome })
+$miHide = New-Object System.Windows.Controls.MenuItem
+$miHide.Header = "Ocultar la pildora (queda en la bandeja)"
+$miHide.Add_Click({ Hide-Pill })
 $miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
 $miPin.Add_Click({ Pin-ToAllDesktops })
 $miExit = New-Object System.Windows.Controls.MenuItem; $miExit.Header = "Salir del HUD"
@@ -1239,10 +1377,90 @@ $miExit.Add_Click({ $window.Close() })
 [void]$menu.Items.Add($miClear)
 [void]$menu.Items.Add($miPomo)
 [void]$menu.Items.Add($miHome)
+[void]$menu.Items.Add($miHide)
 [void]$menu.Items.Add($miPin)
 [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
 [void]$menu.Items.Add($miExit)
 $window.ContextMenu = $menu
+
+# ---- Icono en la bandeja del sistema -----------------------------------------
+# La pildora flota y se puede perder (otro monitor, otro escritorio, detras de
+# una ventana a pantalla completa). El icono de la bandeja es el ancla que
+# SIEMPRE esta en el mismo sitio: desde ahi se recupera la pildora, se abre el
+# panel y se llega a todas las acciones sin recordar ningun atajo.
+$script:Tray = New-Object System.Windows.Forms.NotifyIcon
+try {
+    $script:Tray.Icon = if (Test-Path $IconFile) {
+        New-Object System.Drawing.Icon($IconFile)
+    } else {
+        [System.Drawing.SystemIcons]::Application
+    }
+} catch {
+    $script:Tray.Icon = [System.Drawing.SystemIcons]::Application
+    Write-HudLog "bandeja: no pude cargar $IconFile ($_)"
+}
+$script:Tray.Text = "Atalaya"
+
+$trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
+
+# El gesto se escribe dentro del texto: ShortcutKeyDisplayString solo se pinta
+# si el item tiene ademas un ShortcutKeys valido, y los nuestros son hotkeys
+# globales registrados a mano, no atajos de menu.
+function Add-TrayItem([string]$text, [string]$gesture, [scriptblock]$onClick) {
+    $it = New-Object System.Windows.Forms.ToolStripMenuItem
+    $it.Text = if ($gesture -and $gesture.Trim().ToLower() -ne "none") {
+        "$text  ($gesture)"
+    } else { $text }
+    $it.Add_Click($onClick)
+    [void]$trayMenu.Items.Add($it)
+    return $it
+}
+function Add-TraySep { [void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) }
+
+# Primera linea: resumen en vivo, no accionable (se refresca en cada tick).
+$script:TrayStatus = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:TrayStatus.Text = "Atalaya"
+$script:TrayStatus.Enabled = $false
+[void]$trayMenu.Items.Add($script:TrayStatus)
+Add-TraySep
+
+$null = Add-TrayItem "Abrir el panel" $Hotkeys.togglePanel { Open-Panel }
+$null = Add-TrayItem "Abrir el panel en maximo foco" "" { Open-PanelMax }
+Add-TraySep
+# El rescate va arriba y en negrita: es la razon principal por la que alguien
+# busca este menu.
+$miTrayHome = Add-TrayItem "Recentrar la pildora" $Hotkeys.recenterPill { Move-PillHome }
+try { $miTrayHome.Font = New-Object System.Drawing.Font($trayMenu.Font, [System.Drawing.FontStyle]::Bold) } catch { }
+$script:TrayPillToggle = Add-TrayItem "Ocultar la pildora" "" { Toggle-Pill }
+$null = Add-TrayItem "Anclar a todos los escritorios" "" { Pin-ToAllDesktops }
+Add-TraySep
+$null = Add-TrayItem "Ir a la sesion que te necesita" $Hotkeys.jumpUrgent { Jump-Urgent }
+$null = Add-TrayItem "Mostrar/ocultar el deck" $Hotkeys.toggleDeck {
+    if ($script:PillHidden) { Show-Pill }
+    if ($deck.IsVisible) { Hide-Deck } else { Show-Deck }
+}
+$null = Add-TrayItem "Pomodoro: iniciar/pausar" $Hotkeys.pomodoro { Toggle-Pomodoro }
+$null = Add-TrayItem "Apartar la ventana activa" $Hotkeys.clearWindow { Invoke-ClearWindow }
+Add-TraySep
+$null = Add-TrayItem "Ajustes" "" { Open-PanelSettings }
+$null = Add-TrayItem "Reiniciar el HUD" "" { Invoke-HubPost "/api/hud/restart" "{}" }
+Add-TraySep
+$null = Add-TrayItem "Cerrar el HUD (el hub sigue)" "" { $window.Close() }
+$null = Add-TrayItem "Salir de Atalaya" "" { Exit-Atalaya }
+
+$script:Tray.ContextMenuStrip = $trayMenu
+
+# Clic simple = rescatar la pildora; doble clic = abrir el panel. Quien va al
+# icono suele ir por una de esas dos cosas.
+$script:Tray.Add_MouseClick({
+    param($sender, $e)
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Rescue-Pill }
+})
+$script:Tray.Add_MouseDoubleClick({
+    param($sender, $e)
+    if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left) { Open-Panel }
+})
+$script:Tray.Visible = $true
 
 # ---- Hotkeys globales ---------------------------------------------------------
 $HotkeyHook = {
@@ -1315,17 +1533,35 @@ $window.Add_ContentRendered({
     Update-Hud
     Update-PomoText
     Set-CornerPosition
+    # Rescate automatico al arrancar: la posicion guardada puede haber quedado
+    # en un hueco muerto entre monitores de distinto tamanio (o en un monitor
+    # que ya no existe). Antes solo se validaba contra el rectangulo que
+    # engloba todas las pantallas, que incluye esos huecos.
+    if ($script:PillHwnd -and -not [AtalayaHotkey]::OnScreen($script:PillHwnd)) {
+        Write-HudLog "pildora fuera de pantalla al arrancar; recentrada"
+        Move-PillHome
+    }
     $timer.Start()
     Pin-ToAllDesktops
     Register-Hotkeys
+    Update-TrayMenuState
     if ($script:DeckPinned) {
         Show-Deck
         if (-not $deck.IsMouseOver) { $deck.Opacity = 0.5 }
     }
+    # Se oculta DESPUES de registrar los hotkeys: siguen colgados de este hwnd,
+    # que sigue existiendo aunque la ventana no se pinte.
+    if ($script:PillHidden) { $window.Hide() }
 })
 
 $window.Add_Closed({
     $timer.Stop()
+    # Sin esto queda un icono fantasma en la bandeja hasta que el usuario pasa
+    # el raton por encima.
+    try {
+        $script:Tray.Visible = $false
+        $script:Tray.Dispose()
+    } catch { }
     $script:DeckHideTimer.Stop()
     $script:PomoTimer.Stop()
     try { $deck.Close() } catch { }

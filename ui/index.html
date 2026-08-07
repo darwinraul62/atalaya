@@ -294,7 +294,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.14.0";
+const UI_VERSION = "0.15.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -755,7 +755,8 @@ document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
 });
 
 const settingsEl = document.getElementById("settings");
-document.getElementById("settingsBtn").addEventListener("click", async () => {
+const settingsBtn = document.getElementById("settingsBtn");
+settingsBtn.addEventListener("click", async () => {
   try {
     const cfg = await (await fetch("/api/config")).json();
     document.querySelectorAll("#settings input[data-hk]").forEach((inp) => {
@@ -776,6 +777,10 @@ document.getElementById("settingsBtn").addEventListener("click", async () => {
   settingsEl.showModal();
 });
 document.getElementById("setClose").addEventListener("click", () => settingsEl.close());
+
+// Abrir directo en Ajustes cuando se lanza con .../#ajustes (lo usa la opción
+// "Ajustes" del menú de la bandeja del sistema).
+if (location.hash === "#ajustes") settingsBtn.click();
 document.getElementById("setSave").addEventListener("click", async () => {
   const status = document.getElementById("setStatus");
   const hotkeys = {};

@@ -4,6 +4,47 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.15.0] - 2026-08-07
+
+Atalaya deja de ser "un script de PowerShell" y pasa a comportarse como una
+aplicación de Windows: se la encuentra en el menú Inicio, vive en la bandeja
+del sistema y el proceso se llama Atalaya.
+
+### Añadido
+- **Icono en la bandeja del sistema** con menú contextual completo. Es el
+  ancla permanente: la píldora flota y se puede perder, el icono no se mueve
+  nunca. Clic = rescatar la píldora (la trae al frente; la recentra solo si
+  de verdad quedó fuera de pantalla), doble clic = abrir el panel, clic
+  derecho = menú con el resumen en vivo arriba y todas las acciones con su
+  atajo escrito al lado.
+- **Ocultar la píldora** (menú de la bandeja y de la píldora): Atalaya sigue
+  entero — atajos, toasts, alertas vistas — pero sin nada flotando en
+  pantalla. La preferencia persiste en `hud.json` (`pillHidden`).
+- **`bin\Atalaya.exe`**: anfitrión nativo que ejecuta el HUD dentro de su
+  propio proceso, con icono y datos de versión. El Administrador de tareas y
+  la barra de tareas ya no muestran "Windows PowerShell". Se compila en el
+  `-Setup` con el `csc.exe` que incluye Windows, sin instalar ningún SDK; si
+  falla, el HUD arranca como siempre vía `powershell.exe` y el `-Doctor` lo
+  avisa.
+- **Acceso directo en el menú Inicio** (`atalaya -InstallShortcuts`, y
+  automático en `-Setup`): Atalaya es buscable y anclable a Inicio o a la
+  barra de tareas.
+- **Icono propio** `assets\atalaya.ico` (16→256 px), generado por código con
+  `tools\make-icon.ps1`.
+- `winctl show-panel -Hash ajustes` y soporte de `#ajustes` en el panel: la
+  opción "Ajustes" del menú de la bandeja lo abre directo en esa sección.
+
+### Cambiado
+- Los **toasts** salen a nombre de "Atalaya" (con su icono) en vez de "Windows
+  PowerShell", gracias al `AppUserModelID` `Atalaya.Monitor` grabado en el
+  acceso directo del menú Inicio. Si el acceso directo no está, se usa como
+  antes el AppId de PowerShell.
+- `-InstallAutostart` y el reinicio del HUD desde el panel usan `Atalaya.exe`
+  cuando existe.
+- El `-Doctor` informa del ejecutable, del icono, del acceso directo del menú
+  Inicio y de si el HUD está corriendo bajo la identidad de Atalaya.
+- `-Uninstall` retira también el acceso directo del menú Inicio.
+
 ## [0.14.0] - 2026-07-18
 
 ### Añadido

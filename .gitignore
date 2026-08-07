@@ -1,4 +1,6 @@
 node_modules/
+bin/
+assets/icon-preview.png
 tools/VirtualDesktop*.exe
 tools/VirtualDesktop*.cs
 *.log
