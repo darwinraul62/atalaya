@@ -19,12 +19,25 @@ $IcoPath  = Join-Path $RepoRoot "assets\atalaya.ico"
 
 if (-not (Test-Path $SrcPath)) { Write-Host "[x] Falta $SrcPath"; exit 1 }
 
-# Si el exe ya esta y es mas nuevo que las fuentes, no recompilamos.
+# --- Version: se toma de package.json para no duplicarla ----------------------
+$version = "0.0.0"
+try {
+    $pkg = Get-Content (Join-Path $RepoRoot "package.json") -Raw | ConvertFrom-Json
+    if ($pkg.version) { $version = [string]$pkg.version }
+} catch { }
+$verParts = @($version -split "\." | ForEach-Object { ($_ -replace "[^0-9]", "") })
+while ($verParts.Count -lt 4) { $verParts += "0" }
+$asmVersion = ($verParts[0..3] -join ".")
+
+# Se recompila si el exe falta, si es mas viejo que la fuente o si su version no
+# coincide con la del paquete (pasa al actualizar: los .ps1 cambian de version
+# aunque AtalayaHost.cs siga igual, y el exe se quedaria anunciando la vieja).
 if ((Test-Path $ExePath) -and -not $Force) {
     $exeTime = (Get-Item $ExePath).LastWriteTimeUtc
     $srcTime = (Get-Item $SrcPath).LastWriteTimeUtc
-    if ($exeTime -gt $srcTime) {
-        Write-Host "[+] Atalaya.exe: ya compilado y al dia ($ExePath)"
+    $exeVer = (Get-Item $ExePath).VersionInfo.FileVersion
+    if ($exeTime -gt $srcTime -and $exeVer -eq $asmVersion) {
+        Write-Host "[+] Atalaya.exe: ya compilado y al dia (v$exeVer)"
         exit 0
     }
 }
@@ -49,16 +62,6 @@ if (-not $smaPath -or -not (Test-Path $smaPath)) {
     Write-Host "[x] No pude localizar System.Management.Automation.dll"
     exit 1
 }
-
-# --- Version: se toma de package.json para no duplicarla ----------------------
-$version = "0.0.0"
-try {
-    $pkg = Get-Content (Join-Path $RepoRoot "package.json") -Raw | ConvertFrom-Json
-    if ($pkg.version) { $version = [string]$pkg.version }
-} catch { }
-$verParts = @($version -split "\." | ForEach-Object { ($_ -replace "[^0-9]", "") })
-while ($verParts.Count -lt 4) { $verParts += "0" }
-$asmVersion = ($verParts[0..3] -join ".")
 
 $verSrc = Join-Path $env:TEMP "AtalayaVersionInfo.cs"
 $verContent = @"

@@ -5,3 +5,6 @@ tools/VirtualDesktop*.exe
 tools/VirtualDesktop*.cs
 *.log
 workspaces.json
+dist/
+tools/vdesk/
+release.json

@@ -224,12 +224,27 @@ Requisitos:
 Todo es relativo a la carpeta del repo: clónalo donde quieras, no hay rutas
 fijas. Los instaladores calculan sus rutas a partir de su propia ubicación.
 
-**Con un solo comando** (requiere git; clona a `%LOCALAPPDATA%\Atalaya`,
-configura todo y arranca):
+Hay **dos vías**, ambas de un solo comando. Dejan exactamente la misma
+instalación funcionando y las dos se actualizan solas; solo cambia de dónde
+sale el código.
+
+**Con git** — clona el repositorio en `%LOCALAPPDATA%\Atalaya`. Elige esta si
+quieres el código a mano o piensas contribuir:
 
 ```powershell
 irm https://raw.githubusercontent.com/darwinraul62/atalaya/main/setup.ps1 | iex
 ```
+
+**Sin git** — descarga el paquete de la última versión, con los binarios ya
+compilados (~330 KB). No necesita git ni compilador:
+
+```powershell
+irm https://raw.githubusercontent.com/darwinraul62/atalaya/main/install.ps1 | iex
+```
+
+> Si usas la vía con git y no lo tienes instalado, el instalador se ofrece a
+> ponerlo con `winget`; si prefieres no hacerlo, **cambia solo** a la vía sin
+> git. En ningún caso te quedas a medias.
 
 O desde un clone propio:
 
@@ -238,6 +253,11 @@ git clone <url-del-repo> atalaya
 cd atalaya
 atalaya.cmd -Setup
 ```
+
+Variables de entorno útiles para instalaciones desatendidas:
+`ATALAYA_YES=1` (acepta instalar los requisitos que falten),
+`ATALAYA_NO_AUTOSTART=1` (sin arranque automático),
+`ATALAYA_VERSION=v0.16.0` y `ATALAYA_DEST=<carpeta>` (solo `install.ps1`).
 
 El setup resuelve los requisitos, compila `tools\VirtualDesktop.exe` y
 `bin\Atalaya.exe`, crea `workspaces.json` desde el ejemplo, **integra los
@@ -266,8 +286,15 @@ hooks.
 
 ### Actualizarse
 
-La instalación **es** un clone de git, así que actualizar es traer la última
-versión publicada. Hay tres caminos, todos equivalentes:
+Atalaya se actualiza igual de bien lo hayas instalado con git o sin él; se da
+cuenta solo de cuál es su caso:
+
+| Instalado con | Cómo se entera | Cómo se actualiza |
+|---|---|---|
+| **git** (`setup.ps1`) | `git fetch` cada 12 h | `git merge --ff-only` de la rama de `origin` |
+| **sin git** (`install.ps1`) | consulta el último release cada 12 h | descarga el ZIP, verifica su SHA256 y reemplaza los archivos |
+
+Hay tres caminos para lanzarla, todos equivalentes:
 
 - **Desde el panel**: cuando hay versión nueva aparece un botón `⬆ Actualizar
   a vX.Y.Z` en la cabecera. Un clic (con confirmación) y listo.
@@ -282,10 +309,11 @@ ajusta o se apaga en `%USERPROFILE%\.atalaya\config.json`:
 { "update": { "check": true, "intervalHours": 12 } }
 ```
 
-Qué hace exactamente una actualización: detiene hub y HUD → `git merge
---ff-only` de la rama de origin → recompila `bin\Atalaya.exe` → rehace los
-accesos directos y el registro → reintegra los hooks de los agentes (por si
-cambiaron) → vuelve a arrancar y avisa con un toast.
+Qué hace exactamente una actualización: detiene hub y HUD → trae el código
+nuevo → deja listo `bin\Atalaya.exe` (lo recompila si vino por git; ya viene
+hecho si vino por ZIP) → rehace los accesos directos y el registro →
+reintegra los hooks de los agentes (por si cambiaron) → vuelve a arrancar y
+avisa con un toast.
 
 **Nunca pisa trabajo local.** Si el clone tiene cambios sin guardar o commits
 propios que no están en origin, se detiene y lo explica en vez de fusionar
@@ -342,6 +370,30 @@ Atalaya se presenta como una app normal, no como un script suelto:
 - **Icono**: `assets\atalaya.ico` (multi-resolución, 16→256 px). Se genera por
   código con `tools\make-icon.ps1` (`-Preview` escribe una hoja de contacto
   para revisarlo sobre fondo claro y oscuro).
+
+### Cómo se construye el paquete distribuible
+
+Cada etiqueta `vX.Y.Z` dispara `.github/workflows/release.yml`, que en un
+runner de Windows compila y publica un ZIP (~330 KB) junto a su SHA256. La
+lógica vive en scripts, no en el YAML, así que se puede reproducir en local:
+
+```bat
+powershell -ExecutionPolicy Bypass -File tools\build-host.ps1 -Force
+powershell -ExecutionPolicy Bypass -File tools\get-virtualdesktop.ps1 -All -OutDir tools\vdesk
+powershell -ExecutionPolicy Bypass -File tools\make-package.ps1 -OutDir dist
+powershell -ExecutionPolicy Bypass -File tools\check-package.ps1 -DistDir dist
+```
+
+Detalle que importa: **`VirtualDesktop.exe` depende de la versión de Windows**
+(las interfaces COM de escritorios virtuales cambian entre builds), y el
+runner de CI no es el Windows de quien instala. Por eso se compilan **todas**
+las variantes (`win10`, `win11`, `win11-24h2`) y la instalación copia la suya
+con `tools\get-virtualdesktop.ps1 -Select`.
+
+`check-package.ps1` verifica antes de publicar que estén todos los archivos,
+que no se cuele estado del usuario ni historia de git, que vayan las tres
+variantes y que `hooks/install-wsl.sh` conserve finales de línea LF (con CRLF,
+bash dentro de WSL falla).
 
 > **Windows 11 esconde los iconos nuevos de la bandeja.** Si no ves el de
 > Atalaya, despliega la flecha **^** de la barra de tareas y **arrástralo**

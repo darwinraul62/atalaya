@@ -14,6 +14,7 @@
  */
 
 import http from "node:http";
+import https from "node:https";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -21,7 +22,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.15.0";
+const VERSION = "0.16.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -537,11 +538,84 @@ function git(args, cb) {
   execFile("git", ["-C", REPO_ROOT, ...args], { windowsHide: true, timeout: 30000 }, cb);
 }
 
+// Instalación desde el paquete publicado: no hay git, así que se pregunta a la
+// API de releases de GitHub. Sin token: 60 peticiones/hora por IP, y aquí se
+// consulta una vez cada 12 h.
+function repoSlug() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, "package.json"), "utf8"));
+    const m = String(pkg.repository?.url || "").match(/github\.com[/:]([^/]+\/[^/.]+)/);
+    if (m) return m[1];
+  } catch {
+    /* valor por defecto */
+  }
+  return "darwinraul62/atalaya";
+}
+
+function isNewerVersion(candidate, current) {
+  const parse = (v) =>
+    String(v || "")
+      .replace(/^v/, "")
+      .split(".")
+      .map((n) => parseInt(n, 10) || 0);
+  const a = parse(candidate);
+  const b = parse(current);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    const d = (a[i] || 0) - (b[i] || 0);
+    if (d !== 0) return d > 0;
+  }
+  return false;
+}
+
+function checkLatestRelease(cb) {
+  const req = https.get(
+    `https://api.github.com/repos/${repoSlug()}/releases/latest`,
+    { headers: { "User-Agent": "atalaya", Accept: "application/vnd.github+json" }, timeout: 20000 },
+    (res) => {
+      let body = "";
+      res.on("data", (c) => (body += c));
+      res.on("end", () => {
+        if (res.statusCode !== 200) return cb(new Error(`HTTP ${res.statusCode}`));
+        try {
+          cb(null, JSON.parse(body));
+        } catch (e) {
+          cb(e);
+        }
+      });
+    }
+  );
+  req.on("timeout", () => req.destroy(new Error("timeout")));
+  req.on("error", cb);
+}
+
 function checkUpdate(cb = () => {}) {
   git(["rev-parse", "--is-inside-work-tree"], (notRepo) => {
     if (notRepo) {
-      updateInfo = { ...updateInfo, available: false, error: "no es un clone de git" };
-      return cb(updateInfo);
+      // Modo ZIP: comparar la etiqueta del último release con nuestra versión.
+      return checkLatestRelease((err, rel) => {
+        if (err || !rel) {
+          updateInfo = {
+            ...updateInfo,
+            checkedAt: new Date().toISOString(),
+            error: "no pude consultar los releases",
+          };
+          saveUpdateInfo();
+          return cb(updateInfo);
+        }
+        const tag = String(rel.tag_name || "");
+        const available = isNewerVersion(tag, VERSION);
+        updateInfo = {
+          available,
+          behind: available ? 1 : 0,
+          tag: tag || null,
+          checkedAt: new Date().toISOString(),
+          error: null,
+        };
+        saveUpdateInfo();
+        if (available) log(`actualización disponible: ${tag} (paquete publicado)`);
+        scheduleBroadcast();
+        cb(updateInfo);
+      });
     }
     git(["fetch", "--quiet", "--tags", "origin"], (errFetch) => {
       if (errFetch) {

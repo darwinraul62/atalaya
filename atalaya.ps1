@@ -215,9 +215,40 @@ function Show-Toast([string]$title, [string]$body) {
 }
 
 # ---- Actualizacion -----------------------------------------------------------
-# La instalacion ES un clone de git, asi que actualizar = traer la rama de
-# origin con --ff-only: si el clone tiene commits propios o cambios sin guardar
-# se avisa y NO se toca nada. Nunca se pisa trabajo local.
+# Hay dos formas de instalar Atalaya y por tanto dos de actualizarlo:
+#
+#   "git"  la instalacion es un clone (setup.ps1): se trae la rama de origin con
+#          --ff-only. Si el clone tiene commits propios o cambios sin guardar se
+#          avisa y NO se toca nada; nunca se pisa trabajo local.
+#   "zip"  la instalacion salio del paquete publicado (install.ps1): se descarga
+#          el ZIP de la ultima version y se sustituyen los archivos.
+#
+# En los dos casos el estado del usuario (~/.atalaya) y workspaces.json quedan
+# intactos.
+
+function Get-InstallMode {
+    if ((Test-Path (Join-Path $RepoRoot ".git")) -and
+        (Get-Command git -ErrorAction SilentlyContinue)) { return "git" }
+    # Sin clone (o sin git) solo cabe el paquete publicado.
+    return "zip"
+}
+
+function Get-RepoSlug {
+    try {
+        $pkg = Get-Content (Join-Path $RepoRoot "package.json") -Raw | ConvertFrom-Json
+        if ($pkg.repository.url -match "github\.com[/:]([^/]+/[^/.]+)") { return $Matches[1] }
+    } catch { }
+    return "darwinraul62/atalaya"
+}
+
+# -1 / 0 / 1 comparando "v0.16.0" con "0.15.0". 0 si alguna no se entiende.
+function Compare-AtalayaVersion([string]$a, [string]$b) {
+    try {
+        $va = [version](($a -replace "^v", "") -replace "[^0-9.].*$", "")
+        $vb = [version](($b -replace "^v", "") -replace "[^0-9.].*$", "")
+        return $va.CompareTo($vb)
+    } catch { return 0 }
+}
 
 function Invoke-Git([string[]]$gitArgs) {
     $out = & git -C $RepoRoot @gitArgs 2>&1
@@ -263,6 +294,64 @@ function Get-UpdateStatus {
         Behind    = if ($counts.Count -ge 2) { [int]$counts[1] } else { 0 }
         Dirty     = ((Invoke-Git @("status", "--porcelain")).Out).Length -gt 0
         RemoteTag = $tag
+    }
+}
+
+# --- Modo ZIP: consultar y aplicar el paquete publicado ----------------------
+
+function Get-LatestRelease {
+    try {
+        [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+        return Invoke-RestMethod -Uri "https://api.github.com/repos/$(Get-RepoSlug)/releases/latest" `
+            -Headers @{ "User-Agent" = "atalaya" } -TimeoutSec 20
+    } catch {
+        Write-Host "[x] No pude consultar las versiones publicadas: $($_.Exception.Message)"
+        return $null
+    }
+}
+
+# Descarga el ZIP del release, verifica su hash y lo vuelca sobre $RepoRoot.
+# $true si los archivos quedaron sustituidos.
+function Install-ReleaseZip($release) {
+    $asset = $release.assets | Where-Object { $_.name -like "atalaya-*.zip" } | Select-Object -First 1
+    if (-not $asset) {
+        Write-Host "[x] La version $($release.tag_name) no trae paquete ZIP."
+        return $false
+    }
+    $tmp = Join-Path ([System.IO.Path]::GetTempPath()) ("atalaya-up-" + [guid]::NewGuid().ToString("N"))
+    New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+    try {
+        $zipPath = Join-Path $tmp $asset.name
+        Write-Host "... Descargando $($asset.name) ($([int]($asset.size/1KB)) KB)"
+        Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath `
+            -Headers @{ "User-Agent" = "atalaya" } -UseBasicParsing
+
+        $sha = $release.assets | Where-Object { $_.name -eq "$($asset.name).sha256" } | Select-Object -First 1
+        if ($sha) {
+            $expected = ((Invoke-WebRequest -Uri $sha.browser_download_url `
+                -Headers @{ "User-Agent" = "atalaya" } -UseBasicParsing).Content -split "\s+")[0]
+            if ($expected -and (Get-FileHash $zipPath -Algorithm SHA256).Hash -ne $expected.Trim()) {
+                Write-Host "[x] El paquete no coincide con su hash SHA256. No se aplica nada."
+                return $false
+            }
+            Write-Host "[+] Integridad verificada (SHA256)"
+        }
+
+        Add-Type -AssemblyName System.IO.Compression.FileSystem
+        $unzip = Join-Path $tmp "x"
+        [System.IO.Compression.ZipFile]::ExtractToDirectory($zipPath, $unzip)
+        $payload = Join-Path $unzip "Atalaya"
+        if (-not (Test-Path $payload)) { $payload = $unzip }
+
+        # Se copia ENCIMA: lo que no venga en el paquete (workspaces.json, el
+        # estado, ajustes locales) se queda donde estaba.
+        Copy-Item (Join-Path $payload "*") $RepoRoot -Recurse -Force
+        return $true
+    } catch {
+        Write-Host "[x] Fallo la actualizacion: $($_.Exception.Message)"
+        return $false
+    } finally {
+        Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
     }
 }
 
@@ -436,13 +525,15 @@ if ($Doctor) {
         Write-Host "[-] Aplicaciones instaladas: no registrado (atalaya -Setup lo registra)"
     }
     # Actualizaciones: no consultamos la red aqui (el doctor debe ser rapido y
-    # funcionar sin conexion); solo se informa si el clone puede recibirlas.
-    if ((Get-Command git -ErrorAction SilentlyContinue) -and
-        (Invoke-Git @("rev-parse", "--is-inside-work-tree")).Code -eq 0 -and
-        (Invoke-Git @("remote", "get-url", "origin")).Code -eq 0) {
-        Write-Host "[+] Actualizaciones: disponibles (atalaya -Check informa, atalaya -Update instala)"
+    # funcionar sin conexion); solo se informa por que via llegarian.
+    if ((Get-InstallMode) -eq "git") {
+        if ((Invoke-Git @("remote", "get-url", "origin")).Code -eq 0) {
+            Write-Host "[+] Actualizaciones: por git (atalaya -Check informa, atalaya -Update instala)"
+        } else {
+            Write-Host "[-] Actualizaciones: es un clone de git pero sin remoto 'origin'"
+        }
     } else {
-        Write-Host "[-] Actualizaciones: este directorio no es un clone de git con origin"
+        Write-Host "[+] Actualizaciones: por paquete publicado (atalaya -Check informa, atalaya -Update instala)"
     }
     Write-Host ""
     Write-Host "=== Integraciones de agentes ==="
@@ -452,8 +543,53 @@ if ($Doctor) {
 
 if ($Update -or $Check) {
     $before = Get-AtalayaVersion
+    $mode = Get-InstallMode
+    $skipGitUpdate = $false
     Write-Host "=== Atalaya: actualizacion ==="
     Write-Host "Version instalada: v$before  ($RepoRoot)"
+    Write-Host "Modo: $(if ($mode -eq 'git') { 'clone de git' } else { 'paquete publicado (ZIP)' })"
+
+    # --- Instalacion desde el paquete publicado ------------------------------
+    if ($mode -eq "zip") {
+        $release = Get-LatestRelease
+        if (-not $release) { exit 1 }
+        $latest = [string]$release.tag_name
+        if ((Compare-AtalayaVersion $latest $before) -lt 0) {
+            Write-Host "[+] Tu version (v$before) es mas nueva que la ultima publicada ($latest)."
+            exit 0
+        }
+        if ((Compare-AtalayaVersion $latest $before) -eq 0) {
+            Write-Host "[+] Ya estas en la ultima version publicada ($latest)."
+            exit 0
+        }
+        Write-Host "[!] Hay actualizacion disponible: $latest"
+        if ($Check) {
+            Write-Host "    Instalala con: atalaya -Update"
+            exit 0
+        }
+        Write-Host "... Deteniendo Atalaya"
+        Stop-Atalaya
+        if (Install-ReleaseZip $release) {
+            $after = Get-AtalayaVersion
+            Write-Host "[+] Archivos actualizados: v$before -> v$after"
+            # El paquete trae los binarios hechos: solo hay que elegir la
+            # variante de VirtualDesktop que toca y rehacer los registros.
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass `
+                -File (Join-Path $RepoRoot "tools\get-virtualdesktop.ps1") -Select | Out-Null
+            Install-Shortcuts $false | Out-Null
+            Register-UninstallEntry | Out-Null
+            Invoke-Integrate @()
+            Show-Toast "Atalaya actualizado" "v$before -> v$after. Reiniciando hub y HUD."
+        } else {
+            Write-Host "    Arrancando de nuevo la version actual."
+        }
+        Write-Host ""
+        # Cae al arranque normal con el codigo nuevo.
+        $skipGitUpdate = $true
+    }
+}
+
+if (($Update -or $Check) -and -not $skipGitUpdate) {
     if (-not (Test-GitClone)) { exit 1 }
     $st = Get-UpdateStatus
     if (-not $st) { exit 1 }
@@ -561,11 +697,23 @@ if ($Setup) {
     Write-Host "[+] Node en Windows: $nodeV"
 
     $vdExe = Join-Path $RepoRoot "tools\VirtualDesktop.exe"
+    $vdScript = Join-Path $RepoRoot "tools\get-virtualdesktop.ps1"
     if (Test-Path $vdExe) {
         Write-Host "[+] VirtualDesktop.exe: ya presente"
+    } elseif (Test-Path (Join-Path $RepoRoot "tools\vdesk")) {
+        # Instalacion desde ZIP: los binarios vienen hechos y solo hay que
+        # elegir el que corresponde a este Windows (las interfaces COM de
+        # escritorios virtuales cambian entre versiones).
+        Write-Host "... Eligiendo VirtualDesktop.exe para este Windows"
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $vdScript -Select
+        if (-not (Test-Path $vdExe)) {
+            Write-Host "... No habia variante precompilada; compilando"
+            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $vdScript
+        }
+        if (-not (Test-Path $vdExe)) { Write-Host "[-] VirtualDesktop.exe: sin el, el salto entre escritorios queda limitado" }
     } else {
         Write-Host "... Compilando VirtualDesktop.exe (salto entre escritorios)"
-        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $RepoRoot "tools\get-virtualdesktop.ps1")
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $vdScript
         if (Test-Path $vdExe) { Write-Host "[+] VirtualDesktop.exe: compilado" }
         else { Write-Host "[-] VirtualDesktop.exe: no se pudo compilar; el salto de escritorio queda limitado (reintenta con tools\get-virtualdesktop.ps1)" }
     }

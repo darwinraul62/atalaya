@@ -4,6 +4,44 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.16.0] - 2026-08-07
+
+Segunda vía de instalación: **sin git y sin compilador**, descargando un
+paquete de ~330 KB con los binarios ya construidos. Las dos vías conviven y
+las dos se actualizan solas.
+
+### Añadido
+- **`install.ps1`**: instalación desde el paquete publicado.
+  `irm .../install.ps1 | iex` descarga el ZIP de la última versión, verifica su
+  **SHA256**, lo despliega en `%LOCALAPPDATA%\Atalaya` y ejecuta la
+  instalación. Admite `ATALAYA_VERSION`, `ATALAYA_DEST` y
+  `ATALAYA_INSTALL_ONLY=1` (solo desplegar, sin instalar).
+- **Publicación automática**: `.github/workflows/release.yml` compila y publica
+  el paquete al empujar una etiqueta `vX.Y.Z`. La lógica vive en
+  `tools\make-package.ps1` y `tools\check-package.ps1`, reproducibles en local.
+- **`tools\check-package.ps1`**: revisa el paquete antes de publicarlo —
+  archivos requeridos, que no se cuele estado del usuario ni historia de git,
+  las tres variantes de VirtualDesktop y que `hooks/install-wsl.sh` conserve
+  finales de línea LF.
+- **Actualización en modo ZIP**: las instalaciones sin git consultan el último
+  release (cada 12 h, igual que antes) y se actualizan descargando y
+  verificando el paquete. El panel, la bandeja y `atalaya -Update` funcionan
+  igual en los dos modos; el `-Doctor` dice por cuál vía llegarían.
+- `setup.ps1` **cambia solo a la vía sin git** si no hay git y no quieres
+  instalarlo. Ya no hay callejón sin salida.
+
+### Cambiado
+- `tools\get-virtualdesktop.ps1` gana `-All` (compila todas las variantes, para
+  publicar) y `-Select` (elige la variante precompilada que corresponde a este
+  Windows). El `-Setup` usa `-Select` cuando la instalación vino del paquete.
+- `package.json` declara `repository`: de ahí salen el propietario y el nombre
+  del repositorio para consultar los releases, en vez de estar escritos a mano.
+
+### Corregido
+- **`get-virtualdesktop.ps1` fallaba en Windows 11 anteriores a 24H2**: pedía
+  `VirtualDesktop11-23H2.cs`, que no existe en el repositorio de MScholtes
+  (devolvía 404). Ese rango lo cubre `VirtualDesktop11.cs`.
+
 ## [0.15.0] - 2026-08-07
 
 Atalaya deja de ser "un script de PowerShell" y pasa a comportarse como una

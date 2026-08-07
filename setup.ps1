@@ -36,20 +36,32 @@ $target = Join-Path $env:LOCALAPPDATA "Atalaya"
 # --- git ----------------------------------------------------------------------
 # Version reducida de Install-Prereq (atalaya.ps1): aqui todavia no existe el
 # clone, asi que este archivo tiene que valerse por si mismo.
-if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
-        Write-Host "[x] Atalaya necesita git y no encuentro winget para instalarlo."
-        Write-Host "    Instalalo desde https://git-scm.com y vuelve a ejecutar el instalador."
-        exit 1
+# Si git no esta, hay salida: existe una via de instalacion que no lo necesita
+# (install.ps1, que baja el paquete ya compilado). Se ofrece antes de rendirse.
+function Invoke-ZipInstaller {
+    Write-Host "... Cambiando a la instalacion sin git (paquete publicado)"
+    $url = "https://raw.githubusercontent.com/darwinraul62/atalaya/main/install.ps1"
+    if ($env:ATALAYA_REPO -match "github\.com[/:]([^/]+/[^/.]+)") {
+        $url = "https://raw.githubusercontent.com/$($Matches[1])/main/install.ps1"
     }
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    & ([scriptblock]::Create((Invoke-RestMethod -Uri $url)))
+    exit $LASTEXITCODE
+}
+
+if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
     Write-Host ""
-    Write-Host "Falta git, que Atalaya necesita para instalarse y para actualizarse."
+    Write-Host "Falta git. Atalaya se puede instalar de dos maneras:"
+    Write-Host "  1) con git  - clona el repositorio (podras ver y modificar el codigo)"
+    Write-Host "  2) sin git  - descarga el paquete ya compilado"
+    Write-Host "Las dos dejan la misma instalacion, y las dos se actualizan solas."
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "No encuentro winget para instalar git, asi que voy por la opcion 2."
+        Invoke-ZipInstaller
+    }
     if ($env:ATALAYA_YES -ne "1") {
-        $ans = Read-Host "  Instalarlo ahora con winget? Windows pedira permiso de administrador [S/n]"
-        if ($ans -and $ans.Trim().ToLower().StartsWith("n")) {
-            Write-Host "[-] De acuerdo. Instalalo desde https://git-scm.com y reintenta."
-            exit 1
-        }
+        $ans = Read-Host "  Instalar git ahora con winget (S) o seguir sin el (n)? [S/n]"
+        if ($ans -and $ans.Trim().ToLower().StartsWith("n")) { Invoke-ZipInstaller }
     }
     Write-Host "... Instalando git con winget (puede tardar un par de minutos)"
     & winget install --id Git.Git --exact --source winget `
@@ -60,8 +72,8 @@ if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
         [Environment]::GetEnvironmentVariable("Path", "User")
     ) | Where-Object { $_ }) -join ";"
     if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-        Write-Host "[x] git sigue sin aparecer. Abre una terminal NUEVA y repite este mismo comando."
-        exit 1
+        Write-Host "[-] git sigue sin aparecer en esta sesion; sigo por la via sin git."
+        Invoke-ZipInstaller
     }
     Write-Host "[+] git instalado"
 }

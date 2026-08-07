@@ -1,0 +1,62 @@
+# Publica el paquete distribuible de Atalaya al empujar una etiqueta vX.Y.Z.
+#
+# La logica vive en tools\*.ps1, no aqui: asi se puede reproducir exactamente lo
+# que hace el CI ejecutando esos scripts en local.
+#
+# Se compila en Windows porque los dos binarios lo requieren:
+#   bin\Atalaya.exe        anfitrion del HUD (csc de .NET Framework)
+#   tools\vdesk\*.exe      VirtualDesktop de MScholtes, UNA VARIANTE POR VERSION
+#                          DE WINDOWS (las interfaces COM cambian); el runner no
+#                          es el Windows del usuario, asi que se publican todas
+#                          y la instalacion elige la suya.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Etiqueta existente sobre la que publicar (p. ej. v0.16.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - name: Compilar Atalaya.exe
+        shell: powershell
+        run: .\tools\build-host.ps1 -Force
+
+      - name: Compilar las variantes de VirtualDesktop
+        shell: powershell
+        run: .\tools\get-virtualdesktop.ps1 -All -OutDir tools\vdesk
+
+      - name: Armar el paquete
+        shell: powershell
+        run: .\tools\make-package.ps1 -OutDir dist
+
+      - name: Comprobar que el paquete esta completo
+        shell: powershell
+        run: .\tools\check-package.ps1 -DistDir dist
+
+      - name: Publicar en el release
+        shell: powershell
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          gh release upload $env:TAG (Get-ChildItem dist\* | ForEach-Object { $_.FullName }) --clobber
+
+      - name: Guardar tambien como artefacto del flujo
+        uses: actions/upload-artifact@v4
+        with:
+          name: atalaya-package
+          path: dist/*
