@@ -4,6 +4,21 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.16.1] - 2026-08-07
+
+### Corregido
+- **La verificación del SHA256 rechazaba paquetes válidos**, lo que dejaba
+  inservibles la instalación y la actualización por ZIP. Con
+  `-UseBasicParsing`, `Invoke-WebRequest` devuelve `.Content` como `byte[]`
+  cuando el servidor no declara un tipo de texto — y GitHub sirve el `.sha256`
+  como `application/octet-stream` —, así que la comparación nunca coincidía.
+  Ahora se decodifica antes de comparar, y si falla se muestran los dos hashes.
+- `tools\make-package.ps1` excluye `assets\icon-preview.png`: solo existe en
+  equipos donde se ejecutó `make-icon.ps1 -Preview`, y hacía que el paquete
+  construido en local no fuese el mismo que el del CI.
+- El flujo de publicación crea el release si la etiqueta aún no lo tiene, en
+  vez de fallar al adjuntar el paquete.
+
 ## [0.16.0] - 2026-08-07
 
 Segunda vía de instalación: **sin git y sin compilador**, descargando un

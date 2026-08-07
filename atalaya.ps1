@@ -328,10 +328,21 @@ function Install-ReleaseZip($release) {
 
         $sha = $release.assets | Where-Object { $_.name -eq "$($asset.name).sha256" } | Select-Object -First 1
         if ($sha) {
-            $expected = ((Invoke-WebRequest -Uri $sha.browser_download_url `
-                -Headers @{ "User-Agent" = "atalaya" } -UseBasicParsing).Content -split "\s+")[0]
-            if ($expected -and (Get-FileHash $zipPath -Algorithm SHA256).Hash -ne $expected.Trim()) {
+            # OJO: con -UseBasicParsing, .Content llega como BYTE[] cuando el
+            # servidor no declara tipo de texto (GitHub sirve el .sha256 como
+            # octet-stream). Sin convertirlo, la verificacion rechazaria
+            # paquetes validos.
+            $resp = Invoke-WebRequest -Uri $sha.browser_download_url `
+                -Headers @{ "User-Agent" = "atalaya" } -UseBasicParsing
+            $shaText = if ($resp.Content -is [byte[]]) {
+                [System.Text.Encoding]::ASCII.GetString($resp.Content)
+            } else { [string]$resp.Content }
+            $expected = ($shaText.Trim() -split "[^0-9A-Fa-f]")[0]
+            $actual = (Get-FileHash $zipPath -Algorithm SHA256).Hash
+            if ($expected -and $actual -ne $expected) {
                 Write-Host "[x] El paquete no coincide con su hash SHA256. No se aplica nada."
+                Write-Host "    esperado: $expected"
+                Write-Host "    obtenido: $actual"
                 return $false
             }
             Write-Host "[+] Integridad verificada (SHA256)"

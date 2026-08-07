@@ -26,6 +26,17 @@ $dest = if ($env:ATALAYA_DEST) { $env:ATALAYA_DEST } else { Join-Path $env:LOCAL
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
 $headers = @{ "User-Agent" = "atalaya-installer" }
 
+# OJO: con -UseBasicParsing, .Content llega como BYTE[] cuando el servidor no
+# declara un tipo de texto (GitHub sirve el .sha256 como octet-stream). Sin
+# convertirlo, cualquier comparacion de texto falla y la verificacion del hash
+# rechazaria paquetes perfectamente validos.
+function Get-ResponseText($response) {
+    if ($response.Content -is [byte[]]) {
+        return [System.Text.Encoding]::ASCII.GetString($response.Content)
+    }
+    return [string]$response.Content
+}
+
 Write-Host "=== Instalador de Atalaya (sin git) ==="
 
 # --- Localizar el paquete de la version pedida --------------------------------
@@ -60,10 +71,14 @@ Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zipPath -Headers $h
 # --- Verificar la integridad si el release publica el hash --------------------
 $sha = $release.assets | Where-Object { $_.name -eq "$($asset.name).sha256" } | Select-Object -First 1
 if ($sha) {
-    $expected = ((Invoke-WebRequest -Uri $sha.browser_download_url -Headers $headers -UseBasicParsing).Content -split "\s+")[0]
+    $shaText = Get-ResponseText (Invoke-WebRequest -Uri $sha.browser_download_url -Headers $headers -UseBasicParsing)
+    # El archivo es "<hash>  <nombre>": nos quedamos con la primera tirada hexadecimal
+    $expected = ($shaText.Trim() -split "[^0-9A-Fa-f]")[0]
     $actual = (Get-FileHash $zipPath -Algorithm SHA256).Hash
-    if ($expected -and $actual -ne $expected.Trim()) {
+    if ($expected -and $actual -ne $expected) {
         Write-Host "[x] El paquete descargado no coincide con su hash SHA256. Abortando."
+        Write-Host "    esperado: $expected"
+        Write-Host "    obtenido: $actual"
         Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue
         exit 1
     }

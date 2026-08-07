@@ -63,6 +63,11 @@ foreach ($i in $Items) {
     Copy-Item $src (Join-Path $root $i) -Recurse -Force
 }
 
+# La hoja de contacto del icono solo existe en equipos donde se ejecuto
+# make-icon.ps1 -Preview; si se colara, el paquete local y el del CI no serian
+# el mismo archivo.
+Remove-Item (Join-Path $root "assets\icon-preview.png") -Force -ErrorAction SilentlyContinue
+
 New-Item -ItemType Directory -Force -Path (Join-Path $root "tools") | Out-Null
 foreach ($t in $ToolItems) {
     Copy-Item (Join-Path $RepoRoot "tools\$t") (Join-Path $root "tools\$t") -Force
