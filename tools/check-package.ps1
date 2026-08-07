@@ -11,8 +11,10 @@ $ErrorActionPreference = "Stop"
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 if (-not $DistDir) { $DistDir = Join-Path $RepoRoot "dist" }
 
+# El mas reciente, no el primero por nombre: en local puede haber ZIP de
+# versiones anteriores y "0.16.0" ordena antes que "0.16.1".
 $zip = Get-ChildItem (Join-Path $DistDir "atalaya-*.zip") -ErrorAction SilentlyContinue |
-    Select-Object -First 1
+    Sort-Object LastWriteTime -Descending | Select-Object -First 1
 if (-not $zip) { Write-Host "[x] No hay ZIP en $DistDir"; exit 1 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -100,6 +102,36 @@ try {
         Write-Host "[x] Falta el archivo .sha256 junto al ZIP"
         $ok = $false
     } else { Write-Host "[+] Hash SHA256 publicado junto al paquete" }
+
+    # --- Sintaxis de lo que se publica ------------------------------------------
+    # Que los archivos ESTEN no garantiza que sean validos: un error de sintaxis
+    # viajaria hasta la maquina del usuario y solo se veria al ejecutarlo.
+    $work = Join-Path ([System.IO.Path]::GetTempPath()) ("atalaya-check-" + [guid]::NewGuid().ToString("N"))
+    [System.IO.Compression.ZipFile]::ExtractToDirectory($zip.FullName, $work)
+    try {
+        $malos = @()
+        foreach ($ps in Get-ChildItem $work -Recurse -Filter "*.ps1") {
+            $perrs = $null
+            [void][System.Management.Automation.Language.Parser]::ParseFile($ps.FullName, [ref]$null, [ref]$perrs)
+            if ($perrs -and $perrs.Count) {
+                $malos += "$($ps.Name): $($perrs[0].Message)"
+            }
+        }
+        $scripts = @(Get-ChildItem $work -Recurse -Include "*.mjs", "*.js" -File)
+        foreach ($js in $scripts) {
+            & node --check $js.FullName 2>$null | Out-Null
+            if ($LASTEXITCODE -ne 0) { $malos += "$($js.Name): error de sintaxis de JavaScript" }
+        }
+        if ($malos.Count) {
+            Write-Host "[x] Scripts con errores de sintaxis:"
+            $malos | ForEach-Object { Write-Host "    $_" }
+            $ok = $false
+        } else {
+            Write-Host "[+] Sintaxis correcta en todos los .ps1 y .js/.mjs del paquete"
+        }
+    } finally {
+        Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
+    }
 
     if (-not $ok) { exit 1 }
     Write-Host "[+] Paquete correcto"

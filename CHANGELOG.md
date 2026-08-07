@@ -4,6 +4,47 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.17.0] - 2026-08-07
+
+Endurece los tres flujos de ciclo de vida (instalar, actualizar, desinstalar)
+con los fallos que salieron al auditarlos.
+
+### Corregido
+- **El salto entre escritorios se rompía en silencio tras una actualización de
+  Windows.** `VirtualDesktop.exe` depende del build del sistema, se elegía una
+  sola vez al instalar y Windows cambia de build por su cuenta: el binario
+  quedaba desparejado y dejaba de funcionar **sin dar ningún error**. Ahora se
+  registra para qué build se preparó (`tools\vdesk-selected.json`), se revisa
+  en cada arranque y se rehace solo cuando hace falta. El `-Doctor` lo dice.
+  - Como el hub invoca ese ejecutable cada pocos segundos, puede estar **en
+    uso**, y Windows no deja sobrescribir un ejecutable abierto: se aparta
+    renombrándolo y se pone el nuevo en su sitio.
+- **La actualización por ZIP no borraba nada.** Los archivos que una versión
+  nueva ya no incluye se quedaban para siempre. El paquete ahora lleva su
+  inventario en `release.json` y la actualización retira los huérfanos —
+  solo archivos del paquete, nunca nada tuyo.
+- **La actualización por ZIP no tenía vuelta atrás.** Si el copiado fallaba a
+  medias (un archivo bloqueado, un corte) quedaba una instalación mezclada.
+  Ahora se respalda antes y se restaura si algo falla.
+- **Dos instalaciones podían pelearse en silencio** (un clone de git más una
+  instalación desde ZIP): mismo acceso directo, misma clave del registro,
+  mismo PATH, mismo puerto. `-Setup` detecta la otra instalación, avisa de que
+  ésta toma el control, la detiene y la retira del PATH; el `-Doctor` avisa si
+  la que manda es otra.
+- `check-package.ps1` **valida la sintaxis** de todos los `.ps1` y `.js/.mjs`
+  del paquete: que un archivo esté no garantizaba que fuera válido.
+- `check-package.ps1` revisa el ZIP **más reciente** de `dist`, no el primero
+  por nombre (`0.16.0` ordena antes que `0.16.1`).
+
+### Añadido
+- `tools\test-lifecycle.ps1`: prueba el ciclo completo — instalar una versión
+  anterior desde el paquete publicado, actualizar a la última, desinstalar y
+  desinstalar borrando estado y archivos — fotografiando antes todo el estado
+  global (hooks de Windows y de cada distro WSL, PATH, accesos directos,
+  registro, estado del usuario) y restaurándolo al terminar pase lo que pase.
+- `get-virtualdesktop.ps1 -Ensure`: deja el binario correcto para el Windows de
+  hoy, sin ruido si ya lo está.
+
 ## [0.16.1] - 2026-08-07
 
 ### Corregido

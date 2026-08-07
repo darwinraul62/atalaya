@@ -8,3 +8,5 @@ workspaces.json
 dist/
 tools/vdesk/
 release.json
+tools/vdesk-selected.json
+tools/vdesk-old-*.bin

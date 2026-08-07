@@ -45,6 +45,23 @@ $StartMenuLnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\At
 $StartupLnk = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
 New-Item -ItemType Directory -Force -Path (Join-Path $StateDir "sessions") | Out-Null
 
+$VDeskScript = Join-Path $RepoRoot "tools\get-virtualdesktop.ps1"
+$VDeskMarker = Join-Path $RepoRoot "tools\vdesk-selected.json"
+
+# VirtualDesktop.exe depende del build de Windows, y Windows se actualiza solo.
+# Si el binario quedo preparado para otro build, el salto entre escritorios deja
+# de funcionar SIN dar ningun error. Aqui se detecta barato (leer un json y el
+# registro) y solo se lanza el script cuando de verdad hay que rehacerlo.
+function Assert-VirtualDesktop {
+    try {
+        $build = [int](Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").CurrentBuildNumber
+        $marker = Get-Content $VDeskMarker -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ((Test-Path (Join-Path $RepoRoot "tools\VirtualDesktop.exe")) -and
+            [int]$marker.build -eq $build) { return }
+    } catch { }
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $VDeskScript -Ensure
+}
+
 # Compila bin\Atalaya.exe si falta o quedo viejo. $true si esta listo.
 function Build-Host {
     & powershell.exe -NoProfile -ExecutionPolicy Bypass `
@@ -166,6 +183,22 @@ function Register-UninstallEntry {
         if ($size -gt 0) { Set-ItemProperty $UninstallKey "EstimatedSize" $size -Type DWord }
         return $true
     } catch { return $false }
+}
+
+# Devuelve la carpeta de OTRA instalacion de Atalaya, si la hay. Pasa mas de lo
+# que parece: alguien clona el repo y luego prueba el instalador sin git (o al
+# reves) y acaba con dos, peleandose por el mismo acceso directo, la misma clave
+# del registro, el mismo PATH y el mismo puerto.
+function Get-OtherInstall {
+    try {
+        $loc = (Get-ItemProperty $UninstallKey -Name InstallLocation -ErrorAction Stop).InstallLocation
+        if ($loc -and (Test-Path (Join-Path $loc "atalaya.ps1"))) {
+            $a = (Resolve-Path $loc -ErrorAction SilentlyContinue).Path
+            $b = (Resolve-Path $RepoRoot -ErrorAction SilentlyContinue).Path
+            if ($a -and $b -and $a.TrimEnd("\") -ne $b.TrimEnd("\")) { return $a }
+        }
+    } catch { }
+    return $null
 }
 
 function Unregister-UninstallEntry {
@@ -310,6 +343,15 @@ function Get-LatestRelease {
     }
 }
 
+# Inventario de archivos que declara un release.json (vacio si no hay).
+function Get-PackageFiles([string]$jsonPath) {
+    try {
+        $info = Get-Content $jsonPath -Raw -ErrorAction Stop | ConvertFrom-Json
+        if ($info.files) { return @($info.files) }
+    } catch { }
+    return @()
+}
+
 # Descarga el ZIP del release, verifica su hash y lo vuelca sobre $RepoRoot.
 # $true si los archivos quedaron sustituidos.
 function Install-ReleaseZip($release) {
@@ -354,9 +396,54 @@ function Install-ReleaseZip($release) {
         $payload = Join-Path $unzip "Atalaya"
         if (-not (Test-Path $payload)) { $payload = $unzip }
 
+        # Inventario de la version instalada: son los archivos "del paquete",
+        # los unicos que esta funcion puede respaldar o borrar. Nada del usuario
+        # aparece aqui, asi que nada del usuario corre peligro.
+        $oldFiles = @(Get-PackageFiles (Join-Path $RepoRoot "release.json"))
+
+        # Respaldo para poder deshacer si el copiado se queda a medias
+        $backup = Join-Path $tmp "backup"
+        foreach ($rel in $oldFiles) {
+            $from = Join-Path $RepoRoot $rel
+            if (-not (Test-Path $from)) { continue }
+            $to = Join-Path $backup $rel
+            New-Item -ItemType Directory -Force -Path (Split-Path $to -Parent) | Out-Null
+            Copy-Item $from $to -Force
+        }
+
         # Se copia ENCIMA: lo que no venga en el paquete (workspaces.json, el
         # estado, ajustes locales) se queda donde estaba.
-        Copy-Item (Join-Path $payload "*") $RepoRoot -Recurse -Force
+        try {
+            Copy-Item (Join-Path $payload "*") $RepoRoot -Recurse -Force -ErrorAction Stop
+        } catch {
+            Write-Host "[x] El copiado fallo a medias: $($_.Exception.Message)"
+            Write-Host "... Deshaciendo para dejarlo como estaba"
+            foreach ($rel in $oldFiles) {
+                $from = Join-Path $backup $rel
+                if (-not (Test-Path $from)) { continue }
+                $to = Join-Path $RepoRoot $rel
+                New-Item -ItemType Directory -Force -Path (Split-Path $to -Parent) | Out-Null
+                Copy-Item $from $to -Force -ErrorAction SilentlyContinue
+            }
+            Write-Host "[-] Version anterior restaurada."
+            return $false
+        }
+
+        # Huerfanos: archivos que traia la version vieja y la nueva ya no. Sin
+        # esto se irian acumulando para siempre.
+        $newFiles = @(Get-PackageFiles (Join-Path $RepoRoot "release.json"))
+        if ($oldFiles.Count -and $newFiles.Count) {
+            $sobran = @($oldFiles | Where-Object { $newFiles -notcontains $_ })
+            foreach ($rel in $sobran) {
+                # Solo rutas relativas simples: nunca salir de la instalacion
+                if ($rel -match "^[/\\]" -or $rel -match "\.\.") { continue }
+                $victim = Join-Path $RepoRoot $rel
+                if (Test-Path $victim -PathType Leaf) {
+                    Remove-Item $victim -Force -ErrorAction SilentlyContinue
+                }
+            }
+            if ($sobran.Count) { Write-Host "[+] Retirados $($sobran.Count) archivo(s) que ya no forman parte de Atalaya" }
+        }
         return $true
     } catch {
         Write-Host "[x] Fallo la actualizacion: $($_.Exception.Message)"
@@ -512,7 +599,19 @@ if ($Doctor) {
         Write-Host "[-] Menu Inicio: sin acceso directo (atalaya -InstallShortcuts)"
     }
     if (Test-Path (Join-Path $RepoRoot "tools\VirtualDesktop.exe")) {
-        Write-Host "[+] VirtualDesktop.exe: presente (salto entre escritorios habilitado)"
+        $build = [int](Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion").CurrentBuildNumber
+        $marker = $null
+        try { $marker = Get-Content $VDeskMarker -Raw -ErrorAction Stop | ConvertFrom-Json } catch { }
+        if (-not $marker) {
+            Write-Host "[-] VirtualDesktop.exe: presente, pero sin registro de para que build se preparo"
+            Write-Host "    (se rehara solo en el proximo arranque; o: get-virtualdesktop.ps1 -Ensure)"
+        } elseif ([int]$marker.build -ne $build) {
+            Write-Host "[x] VirtualDesktop.exe: preparado para el build $($marker.build) y este Windows es $build"
+            Write-Host "    El salto entre escritorios puede fallar EN SILENCIO. Arreglo: atalaya (rearranque) o"
+            Write-Host "    powershell -File tools\get-virtualdesktop.ps1 -Ensure"
+        } else {
+            Write-Host "[+] VirtualDesktop.exe: variante '$($marker.variant)' al dia (build $build)"
+        }
     } else {
         Write-Host "[-] VirtualDesktop.exe: falta (compila con tools\get-virtualdesktop.ps1)"
     }
@@ -534,6 +633,11 @@ if ($Doctor) {
         Write-Host "[+] Aplicaciones instaladas: registrado (se desinstala desde Configuracion de Windows)"
     } else {
         Write-Host "[-] Aplicaciones instaladas: no registrado (atalaya -Setup lo registra)"
+    }
+    $otra = Get-OtherInstall
+    if ($otra) {
+        Write-Host "[x] Hay OTRA instalacion de Atalaya y es la que manda: $otra"
+        Write-Host "    Ejecuta 'atalaya -Setup' aqui para tomar el control, o desinstala la otra."
     }
     # Actualizaciones: no consultamos la red aqui (el doctor debe ser rapido y
     # funcionar sin conexion); solo se informa por que via llegarian.
@@ -692,6 +796,27 @@ if ($Uninstall) {
 
 if ($Setup) {
     Write-Host "=== Instalacion de Atalaya ==="
+    $otra = Get-OtherInstall
+    if ($otra) {
+        Write-Host ""
+        Write-Host "[!] Ya hay otra instalacion de Atalaya en:"
+        Write-Host "      $otra"
+        Write-Host "    Esta ($RepoRoot) va a tomar el control: los accesos"
+        Write-Host "    directos, el registro y los hooks apuntaran aqui, y la otra se"
+        Write-Host "    quedara sin usar (no se borra nada)."
+        Write-Host "    Para retirarla del todo, luego: powershell -File `"$otra\atalaya.ps1`" -Uninstall -RemoveFiles"
+        Write-Host ""
+        # Si la otra estaba en el PATH, se quita: si no, 'atalaya' seguiria
+        # resolviendo a una instalacion que ya no manda.
+        $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
+        if ($userPath -and (($userPath -split ";") -contains $otra)) {
+            $parts = @(($userPath -split ";") | Where-Object { $_ -and $_ -ne $otra })
+            [Environment]::SetEnvironmentVariable("Path", ($parts -join ";"), "User")
+            Write-Host "[+] La instalacion anterior se retiro del PATH (el comando 'atalaya' apuntara aqui)"
+        }
+        # Y se detiene, para que no queden dos hub peleando por el puerto
+        & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $otra "atalaya.ps1") -Stop | Out-Null
+    }
     $nodeV = & node -v
     if (-not ($nodeV -match "^v(\d+)" -and [int]$Matches[1] -ge 18)) {
         if ($nodeV) {
@@ -770,6 +895,10 @@ if ($Setup) {
 }
 
 # ---- Arranque normal --------------------------------------------------------
+
+# Revision barata en cada arranque (incluido el automatico al iniciar sesion):
+# si Windows cambio de build, se rehace el binario de escritorios virtuales.
+Assert-VirtualDesktop
 
 # workspaces.json local (no versionado) a partir del ejemplo
 $wsFile = Join-Path $RepoRoot "workspaces.json"

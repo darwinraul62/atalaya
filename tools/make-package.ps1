@@ -76,13 +76,20 @@ Copy-Item $VdeskDir (Join-Path $root "tools\vdesk") -Recurse -Force
 New-Item -ItemType Directory -Force -Path (Join-Path $root "bin") | Out-Null
 Copy-Item $BinExe (Join-Path $root "bin\Atalaya.exe") -Force
 
-# Marca de origen: el actualizador la usa para saber que esta instalacion vino
-# de un ZIP (y no de un clone de git) y que version trae.
+# Marca de origen + INVENTARIO. El actualizador la usa para tres cosas: saber
+# que esta instalacion vino de un ZIP, que version trae, y que archivos son
+# "suyos": con eso puede respaldarlos antes de actualizar y borrar los que la
+# version nueva ya no incluya, sin tocar nada del usuario.
+$files = @(Get-ChildItem $root -Recurse -File | ForEach-Object {
+    $_.FullName.Substring($root.Length + 1) -replace "\\", "/"
+})
+$files = @($files + "release.json" | Sort-Object -Unique)
 @{
-    version   = $Version
-    channel   = "zip"
-    builtAt   = (Get-Date).ToUniversalTime().ToString("o")
-} | ConvertTo-Json | Set-Content -Path (Join-Path $root "release.json") -Encoding UTF8
+    version = $Version
+    channel = "zip"
+    builtAt = (Get-Date).ToUniversalTime().ToString("o")
+    files   = $files
+} | ConvertTo-Json -Depth 3 | Set-Content -Path (Join-Path $root "release.json") -Encoding UTF8
 
 New-Item -ItemType Directory -Force -Path $OutDir | Out-Null
 $zip = Join-Path $OutDir "atalaya-$Version.zip"

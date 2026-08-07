@@ -18,6 +18,7 @@
 param(
     [switch]$All,
     [switch]$Select,
+    [switch]$Ensure,
     [string]$OutDir
 )
 
@@ -25,6 +26,10 @@ $ErrorActionPreference = "Stop"
 $ToolsDir = $PSScriptRoot
 $ExeFile = Join-Path $ToolsDir "VirtualDesktop.exe"
 $VariantDir = Join-Path $ToolsDir "vdesk"
+# Deja constancia de PARA QUE BUILD se preparo el binario. Windows se actualiza
+# solo y cambia de build; sin esta marca, el exe se queda mudo y el salto entre
+# escritorios deja de funcionar sin dar ningun error.
+$MarkerFile = Join-Path $ToolsDir "vdesk-selected.json"
 
 # De mas nuevo a mas viejo: gana la primera cuyo Min no supere el build actual.
 # Estos son los nombres REALES del repo de MScholtes (hubo una version de este
@@ -46,6 +51,40 @@ function Get-VariantForThisPc {
         if ($build -ge $v.Min) { return $v }
     }
     return $Variants[-1]
+}
+
+function Write-Marker([string]$variantName, [string]$how) {
+    @{
+        variant = $variantName
+        build   = Get-WindowsBuild
+        how     = $how          # "compiled" o "selected"
+        at      = (Get-Date).ToUniversalTime().ToString("o")
+    } | ConvertTo-Json | Set-Content -Path $MarkerFile -Encoding UTF8
+}
+
+function Read-Marker {
+    try { return Get-Content $MarkerFile -Raw | ConvertFrom-Json } catch { return $null }
+}
+
+# Pone $srcExe como VirtualDesktop.exe aunque el actual este EN USO: el hub lo
+# invoca cada pocos segundos, y Windows no deja sobrescribir un ejecutable
+# abierto... pero si deja renombrarlo. Se aparta con extension .bin para que no
+# lo recoja el filtro "VirtualDesktop*.exe" con el que hud y winctl lo buscan.
+function Set-VDeskExe([string]$srcExe) {
+    if (Test-Path $ExeFile) {
+        try {
+            Copy-Item $srcExe $ExeFile -Force
+        } catch {
+            $parked = Join-Path $ToolsDir ("vdesk-old-" + [DateTime]::UtcNow.Ticks + ".bin")
+            Rename-Item $ExeFile $parked -Force
+            Copy-Item $srcExe $ExeFile -Force
+        }
+    } else {
+        Copy-Item $srcExe $ExeFile -Force
+    }
+    # Los apartados de veces anteriores ya no estaran en uso
+    Get-ChildItem (Join-Path $ToolsDir "vdesk-old-*.bin") -ErrorAction SilentlyContinue |
+        ForEach-Object { Remove-Item $_.FullName -Force -ErrorAction SilentlyContinue }
 }
 
 function Get-Csc {
@@ -94,15 +133,56 @@ if ($Select) {
         Write-Host "[-] No hay variante precompilada para $($v.Name) en $VariantDir"
         exit 1
     }
-    Copy-Item $src $ExeFile -Force
+    Set-VDeskExe $src
+    Write-Marker $v.Name "selected"
     Write-Host "[+] VirtualDesktop.exe: variante $($v.Name) (build $(Get-WindowsBuild))"
     exit 0
+}
+
+# --- Modo vigilancia: dejarlo correcto para el Windows de HOY ----------------
+# Windows se actualiza solo y cambia de build. Si el binario se preparo para
+# otro, el salto entre escritorios deja de funcionar SIN dar ningun error, asi
+# que se revisa en cada arranque y se rehace cuando hace falta.
+if ($Ensure) {
+    $v = Get-VariantForThisPc
+    $build = Get-WindowsBuild
+    $marker = Read-Marker
+    if ((Test-Path $ExeFile) -and $marker -and $marker.variant -eq $v.Name) {
+        exit 0   # al dia, sin ruido
+    }
+    if ($marker -and $marker.variant -ne $v.Name) {
+        Write-Host "[-] VirtualDesktop.exe se preparo para '$($marker.variant)' (build $($marker.build)) y ahora este Windows es build $build ('$($v.Name)'): rehaciendolo"
+    }
+    try {
+        $pre = Join-Path $VariantDir "VirtualDesktop-$($v.Name).exe"
+        if (Test-Path $pre) {
+            Set-VDeskExe $pre
+            Write-Marker $v.Name "selected"
+            Write-Host "[+] VirtualDesktop.exe: variante $($v.Name) (build $build)"
+            exit 0
+        }
+        # Se compila a un temporal y luego se coloca, por si el actual esta en uso
+        $tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) "VirtualDesktop-build.exe"
+        Build-Variant $v $tmpExe
+        Set-VDeskExe $tmpExe
+        Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+        Write-Marker $v.Name "compiled"
+        Write-Host "[+] VirtualDesktop.exe: compilado para $($v.Name) (build $build)"
+        exit 0
+    } catch {
+        Write-Host "[-] No pude preparar VirtualDesktop.exe: $_"
+        exit 1
+    }
 }
 
 # --- Modo normal: compilar la variante de este equipo ------------------------
 $v = Get-VariantForThisPc
 Write-Host "Build de Windows: $(Get-WindowsBuild) -> fuente: $($v.Src)"
-Build-Variant $v $ExeFile
+$tmpExe = Join-Path ([System.IO.Path]::GetTempPath()) "VirtualDesktop-build.exe"
+Build-Variant $v $tmpExe
+Set-VDeskExe $tmpExe
+Remove-Item $tmpExe -Force -ErrorAction SilentlyContinue
+Write-Marker $v.Name "compiled"
 Write-Host "OK: $ExeFile"
 Write-Host "Prueba rapida (/Count):"
 & $ExeFile /Count
