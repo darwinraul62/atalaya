@@ -31,6 +31,7 @@ try {
         "Atalaya/package.json",
         "Atalaya/release.json",
         "Atalaya/LICENSE",
+        "Atalaya/THIRD-PARTY-NOTICES.md",
         "Atalaya/README.md",
         "Atalaya/CHANGELOG.md",
         "Atalaya/workspaces.example.json",

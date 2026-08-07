@@ -37,6 +37,9 @@ $Items = @(
     "package.json",
     "README.md",
     "LICENSE",
+    # Obligatorio distribuirlo: contiene el aviso de copyright del componente
+    # de terceros que va compilado dentro del paquete.
+    "THIRD-PARTY-NOTICES.md",
     "CHANGELOG.md",
     "workspaces.example.json"
 )

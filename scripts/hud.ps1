@@ -12,6 +12,14 @@
 # Ejecutar con bin\Atalaya.exe --hud (o powershell.exe, que tambien es STA).
 # Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin
 # BOM.
+#
+# Los dos parametros existen para poder levantar un HUD contra un hub de
+# PRUEBAS sin tocar la instalacion real (es lo que usa la generacion de
+# capturas del README). En uso normal no se pasan.
+param(
+    [string]$HubUrl = "http://127.0.0.1:4777",
+    [string]$StateDir = ""
+)
 
 $ErrorActionPreference = "SilentlyContinue"
 Add-Type -AssemblyName PresentationFramework, PresentationCore, WindowsBase
@@ -105,8 +113,7 @@ public static class AtalayaHotkey {
 }
 "@
 
-$HubUrl   = "http://127.0.0.1:4777"
-$StateDir = Join-Path $env:USERPROFILE ".atalaya"
+if (-not $StateDir) { $StateDir = Join-Path $env:USERPROFILE ".atalaya" }
 $PosFile  = Join-Path $StateDir "hud.json"
 $LogFile  = Join-Path $StateDir "hub.log"
 $RepoRoot = Split-Path -Parent $PSScriptRoot

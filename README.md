@@ -5,6 +5,27 @@ escritorios virtuales de Windows y WSL. Resuelve la pérdida de contexto al
 trabajar en varios clones/proyectos a la vez: en cualquier escritorio ves qué
 sesión está trabajando, cuál terminó (y hace cuánto) y cuál espera tu respuesta.
 
+## Así se ve
+
+Una **píldora** flotante, siempre encima de todo, con un botón por escritorio
+virtual y los contadores por estado. Ámbar con 🔔 = alguien espera tu respuesta:
+
+![La píldora del HUD](docs/img/pildora.png)
+
+Al pasar el ratón (o con un clic, según prefieras) se despliega el **deck**: una
+fila por escritorio con lo que hay en cada uno y la sesión más relevante. Un
+clic te lleva allí:
+
+![El deck, resumen por escritorio](docs/img/deck.png)
+
+Y el **panel** completo, agrupado por escritorio real, con el estado de cada
+sesión, su rama, qué está haciendo y qué te está pidiendo:
+
+![El panel completo](docs/img/panel.png)
+
+> Las capturas usan datos de demostración: los proyectos, escritorios y tareas
+> son inventados.
+
 ## Cómo funciona
 
 ```
