@@ -37,6 +37,16 @@ function Check([string]$nombre, [bool]$ok, [string]$detalle) {
     [void]$pasos.Add([pscustomobject]@{ Nombre = $nombre; Ok = $ok })
 }
 
+# OJO: en PowerShell 5.1 try/catch NO es una expresion, asi que no se puede
+# meter dentro de un Check(...). Tiene que ser una funcion.
+function Test-HubAlive {
+    try {
+        return (Invoke-WebRequest "http://127.0.0.1:4777/api/ping" -UseBasicParsing -TimeoutSec 8).StatusCode -eq 200
+    } catch {
+        return $false
+    }
+}
+
 function Get-WslDistros {
     if (-not (Get-Command wsl.exe -ErrorAction SilentlyContinue)) { return @() }
     $env:WSL_UTF8 = "1"
@@ -129,8 +139,7 @@ try {
         $verTras = (Get-Content (Join-Path $install "package.json") -Raw | ConvertFrom-Json).version
     }
     Check "la actualizacion sube de version" ($verTras -ne $verInstalada) "$verInstalada -> $verTras"
-    Check "el hub responde tras actualizar" `
-        ((try { (Invoke-WebRequest "http://127.0.0.1:4777/api/ping" -UseBasicParsing -TimeoutSec 5).StatusCode -eq 200 } catch { $false }))
+    Check "el hub responde tras actualizar" (Test-HubAlive)
     Write-Host ""
 
     Write-Host "=== 3. Desinstalar (conservando archivos y estado) ==="
@@ -195,8 +204,7 @@ finally {
             Check "WSL ${d}: $f sin perdidas" ($ahora.Length -ge ($wslAntes["$d|$f"]).Length) ""
         }
     }
-    Check "el hub vuelve a responder" `
-        ((try { (Invoke-WebRequest "http://127.0.0.1:4777/api/ping" -UseBasicParsing -TimeoutSec 8).StatusCode -eq 200 } catch { $false }))
+    Check "el hub vuelve a responder" (Test-HubAlive)
 
     Write-Host ""
     $fallos = @($pasos | Where-Object { -not $_.Ok })
