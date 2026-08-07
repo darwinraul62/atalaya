@@ -47,12 +47,11 @@ namespace Atalaya
         private static extern void SetCurrentProcessExplicitAppUserModelID(
             [MarshalAs(UnmanagedType.LPWStr)] string appID);
 
-        // Compilamos como /target:winexe para que el HUD no arrastre una
-        // ventana de consola negra. El precio es que los modos de consola
-        // (--install-shortcut) tampoco escribirian nada visible; engancharse a
-        // la consola del proceso padre devuelve esa salida a la terminal.
-        [DllImport("kernel32.dll")]
-        private static extern bool AttachConsole(int processId);
+        // Se compila como /target:winexe para que el HUD no arrastre una
+        // ventana de consola negra. Por eso este ejecutable NO escribe en
+        // pantalla: quien informa al usuario es atalaya.ps1, que es quien lo
+        // invoca. Lo que hace aqui queda en ~/.atalaya/hub.log.
+        public static void Report(string message) { Log(message); }
 
         [STAThread]
         private static int Main(string[] args)
@@ -68,10 +67,8 @@ namespace Atalaya
             switch (mode)
             {
                 case "--install-shortcut":
-                    try { AttachConsole(-1); } catch { }
                     return Shortcuts.Install(repoRoot, exePath, args);
                 case "--remove-shortcut":
-                    try { AttachConsole(-1); } catch { }
                     return Shortcuts.Remove();
                 case "--hud":
                     return RunScript(repoRoot, Path.Combine(repoRoot, @"scripts\hud.ps1"), new string[0]);
@@ -90,7 +87,7 @@ namespace Atalaya
             }
         }
 
-        private static void Log(string message)
+        internal static void Log(string message)
         {
             try
             {
@@ -171,7 +168,7 @@ namespace Atalaya
 
             Create(startMenu, exePath, "", repoRoot, icon,
                    "Atalaya - monitor de sesiones de agentes", Program.AppId);
-            Console.WriteLine("[+] Menu Inicio: " + startMenu);
+            Program.Report("acceso directo del menu Inicio escrito: " + startMenu);
 
             if (autostart)
             {
@@ -179,7 +176,7 @@ namespace Atalaya
                     Environment.GetFolderPath(Environment.SpecialFolder.Startup), "Atalaya.lnk");
                 Create(startup, exePath, "", repoRoot, icon,
                        "Atalaya - monitor de sesiones de agentes", Program.AppId);
-                Console.WriteLine("[+] Autoarranque: " + startup);
+                Program.Report("acceso directo de autoarranque escrito: " + startup);
             }
             return 0;
         }
@@ -189,8 +186,7 @@ namespace Atalaya
             string startMenu = Path.Combine(
                 Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData),
                 @"Microsoft\Windows\Start Menu\Programs\Atalaya.lnk");
-            if (File.Exists(startMenu)) { File.Delete(startMenu); Console.WriteLine("[+] Acceso directo del menu Inicio retirado"); }
-            else Console.WriteLine("[-] Menu Inicio: no habia acceso directo");
+            if (File.Exists(startMenu)) { File.Delete(startMenu); Program.Report("acceso directo del menu Inicio retirado"); }
             return 0;
         }
 

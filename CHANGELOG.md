@@ -60,7 +60,20 @@ del sistema y el proceso se llama Atalaya.
 - `-Uninstall` retira también el acceso directo del menú Inicio y el registro
   de "Aplicaciones instaladas".
 
+- **Instalación de verdad de un solo comando**: si falta `git` o `Node.js ≥ 18`,
+  el instalador se ofrece a instalarlos con `winget` (preguntando siempre;
+  `ATALAYA_YES=1` acepta sin preguntar). Si no hay winget, explica la descarga
+  manual como antes.
+- **El arranque automático se instala de serie** en `-Setup`, porque Atalaya
+  solo sirve si está vigilando. Se omite con `-NoAutostart` o
+  `ATALAYA_NO_AUTOSTART=1`.
+
 ### Corregido
+- **Los accesos directos podían no crearse.** `Atalaya.exe` es una aplicación
+  de ventana y PowerShell no espera a los procesos de ese subsistema: el setup
+  comprobaba si los accesos directos existían antes de que el ejecutable los
+  hubiera escrito. Ahora se espera al proceso y se verifica cada acceso
+  directo por separado.
 - **La píldora podía quedar en un sitio invisible.** Con monitores de distinto
   tamaño, el rectángulo que los engloba tiene zonas sin pantalla, y la
   validación de la posición guardada solo comprobaba ese rectángulo. Ahora se

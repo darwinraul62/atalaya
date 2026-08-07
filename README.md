@@ -213,8 +213,12 @@ Límites conocidos de la heurística:
 Requisitos:
 
 - Windows 10/11 (los escritorios virtuales y los toasts son nativos de Windows).
-- Node.js ≥ 18 en Windows — y también dentro de WSL si usas Claude Code ahí
-  (vale el de nvm; el instalador captura su ruta absoluta).
+- **git** y **Node.js ≥ 18**. Si falta alguno, el instalador **se ofrece a
+  instalarlo con `winget`** (el gestor de paquetes que ya viene con Windows);
+  siempre pregunta antes, y Windows pedirá permiso de administrador solo para
+  eso. `ATALAYA_YES=1` acepta sin preguntar, para instalaciones desatendidas.
+- Node.js ≥ 18 también dentro de WSL si usas Claude Code ahí (vale el de nvm;
+  el instalador captura su ruta absoluta).
 - PowerShell 5.1 (incluido en Windows; no requiere PowerShell 7).
 
 Todo es relativo a la carpeta del repo: clónalo donde quieras, no hay rutas
@@ -235,12 +239,18 @@ cd atalaya
 atalaya.cmd -Setup
 ```
 
-El setup verifica los requisitos, compila `tools\VirtualDesktop.exe` y
+El setup resuelve los requisitos, compila `tools\VirtualDesktop.exe` y
 `bin\Atalaya.exe`, crea `workspaces.json` desde el ejemplo, **integra los
 agentes detectados** (Claude Code y Codex, en Windows y en cada distro WSL,
-con backup de cada archivo tocado), registra Atalaya en el **menú Inicio**,
-agrega el comando `atalaya` al PATH del usuario y deja hub + HUD corriendo.
-Es idempotente: re-ejecutarlo nunca duplica nada.
+con backup de cada archivo tocado), registra Atalaya en el **menú Inicio** y
+en **Aplicaciones instaladas**, lo deja **arrancando con Windows**, agrega el
+comando `atalaya` al PATH del usuario y deja hub + HUD corriendo. Es
+idempotente: re-ejecutarlo nunca duplica nada.
+
+El arranque automático va de serie porque Atalaya solo sirve si está
+vigilando. Para instalarlo sin él: `atalaya.cmd -Setup -NoAutostart` (o
+`ATALAYA_NO_AUTOSTART=1` con el instalador de una línea); se activa después
+con `atalaya -InstallAutostart` y se quita con `atalaya -Uninstall`.
 
 Comandos de mantenimiento:
 

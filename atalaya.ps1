@@ -4,7 +4,8 @@
 #   atalaya.cmd -Status            muestra el estado actual
 #   atalaya.cmd -Stop              detiene hub y HUD
 #   atalaya.cmd -Setup             instalacion completa (requisitos, hooks,
-#                                  VirtualDesktop.exe, PATH) y arranque
+#                                  ejecutable, accesos directos, autoarranque,
+#                                  PATH) y arranque; -NoAutostart lo omite
 #   atalaya.cmd -Integrate         re-escanea agentes (Claude Code, Codex) en
 #                                  Windows y cada distro WSL e instala hooks
 #   atalaya.cmd -Doctor            informe de salud de la instalacion
@@ -23,6 +24,7 @@ param(
     [switch]$InstallAutostart,
     [switch]$InstallShortcuts,
     [switch]$Setup,
+    [switch]$NoAutostart,
     [switch]$Integrate,
     [switch]$Doctor,
     [switch]$Update,
@@ -40,6 +42,7 @@ $HubUrl = "http://127.0.0.1:4777"
 # "Atalaya" con su propio icono, en vez de aparecer como "Windows PowerShell".
 $HostExe = Join-Path $RepoRoot "bin\Atalaya.exe"
 $StartMenuLnk = Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs\Atalaya.lnk"
+$StartupLnk = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
 New-Item -ItemType Directory -Force -Path (Join-Path $StateDir "sessions") | Out-Null
 
 # Compila bin\Atalaya.exe si falta o quedo viejo. $true si esta listo.
@@ -61,8 +64,66 @@ function Install-Shortcuts([bool]$WithAutostart) {
     }
     $lnkArgs = @("--install-shortcut")
     if ($WithAutostart) { $lnkArgs += "--autostart" }
-    & $HostExe @lnkArgs
-    return (Test-Path $StartMenuLnk)
+    # -Wait es imprescindible: Atalaya.exe se compila como aplicacion de
+    # ventana y PowerShell NO espera a los procesos de ese subsistema. Sin
+    # esto comprobariamos si los accesos directos existen ANTES de que el exe
+    # los haya creado (y a veces el proceso ni sobrevivia al final del setup).
+    Start-Process -FilePath $HostExe -ArgumentList $lnkArgs -Wait -NoNewWindow | Out-Null
+    if (-not (Test-Path $StartMenuLnk)) { return $false }
+    if ($WithAutostart -and -not (Test-Path $StartupLnk)) { return $false }
+    return $true
+}
+
+# ---- Requisitos (git / Node) -------------------------------------------------
+# Si falta alguno se ofrece instalarlo con winget, el gestor de paquetes que ya
+# viene con Windows 10/11. Siempre se pregunta antes: instalar software en la
+# maquina de alguien sin avisar no es aceptable. ATALAYA_YES=1 acepta sin
+# preguntar (util para instalaciones desatendidas).
+# OJO: setup.ps1 tiene una copia reducida de esto para el caso de git, porque
+# corre ANTES de que exista el clone y no puede llamar a este archivo.
+
+function Update-SessionPath {
+    # Tras instalar algo, el PATH nuevo esta en el registro pero no en esta
+    # sesion: sin esto, el comando recien instalado "sigue sin existir".
+    $parts = @(
+        [Environment]::GetEnvironmentVariable("Path", "Machine"),
+        [Environment]::GetEnvironmentVariable("Path", "User")
+    ) | Where-Object { $_ }
+    $env:Path = $parts -join ";"
+}
+
+function Install-Prereq {
+    param(
+        [string]$Name,       # como se lo llamamos al usuario
+        [string]$WingetId,   # identificador exacto del paquete
+        [string]$Command,    # comando que debe existir cuando termine
+        [string]$Url         # descarga manual, por si no hay winget
+    )
+    if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
+        Write-Host "[x] Falta $Name y no encuentro winget para instalarlo automaticamente."
+        Write-Host "    Instalalo desde $Url y vuelve a ejecutar el instalador."
+        return $false
+    }
+    Write-Host ""
+    Write-Host "Falta $Name, que Atalaya necesita."
+    if ($env:ATALAYA_YES -ne "1") {
+        $ans = Read-Host "  Instalarlo ahora con winget? Windows pedira permiso de administrador [S/n]"
+        if ($ans -and $ans.Trim().ToLower().StartsWith("n")) {
+            Write-Host "[-] De acuerdo. Instalalo desde $Url y vuelve a ejecutar el instalador."
+            return $false
+        }
+    }
+    Write-Host "... Instalando $Name con winget (puede tardar un par de minutos)"
+    & winget install --id $WingetId --exact --source winget `
+        --accept-package-agreements --accept-source-agreements --silent
+    Update-SessionPath
+    if (Get-Command $Command -ErrorAction SilentlyContinue) {
+        Write-Host "[+] $Name instalado"
+        return $true
+    }
+    Write-Host "[x] $Name sigue sin aparecer. Puede que baste con abrir una terminal nueva"
+    Write-Host "    y repetir el instalador; si no, instalalo desde $Url."
+    return $false
 }
 
 # ---- Registro de aplicacion instalada ---------------------------------------
@@ -287,7 +348,7 @@ if ($InstallShortcuts) {
 }
 
 if ($InstallAutostart) {
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
+    $lnkPath = $StartupLnk
     # Con el anfitrion nativo el autoarranque tambien apunta a Atalaya.exe (asi
     # el proceso que queda vivo se llama Atalaya); si no se pudo compilar,
     # seguimos con el metodo clasico via powershell.exe.
@@ -366,7 +427,7 @@ if ($Doctor) {
     } else {
         Write-Host "[-] PATH de usuario: no incluye el repo (atalaya -Setup lo agrega)"
     }
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
+    $lnkPath = $StartupLnk
     if (Test-Path $lnkPath) { Write-Host "[+] Autoarranque: instalado" }
     else { Write-Host "[-] Autoarranque: no instalado (atalaya -InstallAutostart)" }
     if (Test-Path $UninstallKey) {
@@ -450,7 +511,7 @@ if ($Uninstall) {
     Write-Host "=== Desinstalando Atalaya ==="
     Stop-Atalaya
     Invoke-Integrate @("--uninstall")
-    $lnkPath = Join-Path ([Environment]::GetFolderPath("Startup")) "Atalaya.lnk"
+    $lnkPath = $StartupLnk
     if (Test-Path $lnkPath) { Remove-Item $lnkPath -Force; Write-Host "[+] Autoarranque retirado" }
     else { Write-Host "[-] Autoarranque: no estaba instalado" }
     if (Test-Path $StartMenuLnk) { Remove-Item $StartMenuLnk -Force; Write-Host "[+] Acceso directo del menu Inicio retirado" }
@@ -486,9 +547,16 @@ if ($Setup) {
     Write-Host "=== Instalacion de Atalaya ==="
     $nodeV = & node -v
     if (-not ($nodeV -match "^v(\d+)" -and [int]$Matches[1] -ge 18)) {
-        Write-Host "[x] Se requiere Node.js >= 18 en Windows (encontrado: '$nodeV')."
-        Write-Host "    Instalalo desde https://nodejs.org y vuelve a ejecutar: atalaya -Setup"
-        exit 1
+        if ($nodeV) {
+            Write-Host "[-] Node en Windows: $nodeV (Atalaya necesita 18 o superior)"
+        }
+        if (-not (Install-Prereq "Node.js" "OpenJS.NodeJS.LTS" "node" "https://nodejs.org")) { exit 1 }
+        $nodeV = & node -v
+        if (-not ($nodeV -match "^v(\d+)" -and [int]$Matches[1] -ge 18)) {
+            Write-Host "[x] Node sigue sin cumplir el minimo (encontrado: '$nodeV')."
+            Write-Host "    Abre una terminal nueva y repite: atalaya -Setup"
+            exit 1
+        }
     }
     Write-Host "[+] Node en Windows: $nodeV"
 
@@ -505,9 +573,21 @@ if ($Setup) {
     if (Build-Host) { Write-Host "[+] Atalaya.exe: listo (el HUD corre como aplicacion propia)" }
     else { Write-Host "[-] Atalaya.exe: no se pudo compilar; el HUD funcionara igual, pero como 'Windows PowerShell'" }
 
+    # El autoarranque va de serie: Atalaya solo sirve si esta vigilando. Quien
+    # lo prefiera manual usa -NoAutostart (o lo quita luego con -Uninstall).
+    $conAutostart = -not $NoAutostart
     Write-Host "... Registrando Atalaya en el menu Inicio"
-    if (Install-Shortcuts $false) { Write-Host "[+] Menu Inicio: buscable como 'Atalaya' y anclable a la barra de tareas" }
+    $lnksOk = Install-Shortcuts $conAutostart
+    if (Test-Path $StartMenuLnk) { Write-Host "[+] Menu Inicio: buscable como 'Atalaya' y anclable a la barra de tareas" }
     else { Write-Host "[-] Menu Inicio: no se pudo crear el acceso directo" }
+    if (-not $conAutostart) {
+        Write-Host "[-] Autoarranque: omitido por -NoAutostart (activalo con: atalaya -InstallAutostart)"
+    } elseif (Test-Path $StartupLnk) {
+        Write-Host "[+] Autoarranque: Atalaya se iniciara con Windows (quitalo con -Uninstall)"
+    } else {
+        Write-Host "[-] Autoarranque: no se pudo crear (reintenta con: atalaya -InstallAutostart)"
+    }
+    if (-not $lnksOk) { Write-Host "    (revisa que bin\Atalaya.exe exista: atalaya -Doctor)" }
 
     if (Register-UninstallEntry) {
         Write-Host "[+] Registrado en 'Aplicaciones instaladas' de Windows (con boton Desinstalar)"
@@ -523,9 +603,8 @@ if ($Setup) {
 
     Write-Host ""
     Write-Host "Instalacion completa. Siguientes pasos opcionales:"
-    Write-Host "  - atalaya -Update             (traer la ultima version cuando quieras)"
-    Write-Host "  - atalaya -InstallAutostart   (arrancar con Windows)"
     Write-Host "  - editar workspaces.json      (nombres y puertos de tus proyectos)"
+    Write-Host "  - atalaya -Update             (traer la ultima version cuando quieras)"
     Write-Host "  - atalaya -Doctor             (verificar todo cuando quieras)"
     Write-Host ""
     # Continua al arranque normal (hub + HUD).
