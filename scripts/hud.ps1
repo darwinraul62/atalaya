@@ -188,7 +188,28 @@ function ConvertTo-Hotkey([string]$spec) {
 }
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
-Set-Content -Path (Join-Path $StateDir "hud.pid") -Value $PID
+$HudPidFile = Join-Path $StateDir "hud.pid"
+Set-Content -Path $HudPidFile -Value $PID
+
+# Windows RECICLA los identificadores de proceso: un .pid que sobrevivio a su
+# dueno puede apuntar a un programa ajeno. Antes de matar por numero se exige
+# que el proceso vivo se llame como esperamos y que arrancara ANTES de que se
+# escribiera el archivo (su dueno lo escribe nada mas nacer, de modo que un
+# numero reciclado pertenece siempre a un proceso posterior).
+function Get-OwnedPid([string]$pidFile, [string[]]$names) {
+    if (-not (Test-Path $pidFile)) { return $null }
+    $procId = 0
+    try { $procId = [int]((Get-Content $pidFile -Raw -ErrorAction Stop).Trim()) } catch { return $null }
+    if ($procId -le 0) { return $null }
+    $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    if (-not $proc) { return $null }
+    if (@($names) -notcontains $proc.ProcessName) { return $null }
+    $written = (Get-Item $pidFile -ErrorAction SilentlyContinue).LastWriteTime
+    $started = $null
+    try { $started = $proc.StartTime } catch { }
+    if ($written -and $started -and $started -gt $written) { return $null }
+    return $procId
+}
 
 function Write-HudLog([string]$msg) {
     try { Add-Content -Path $LogFile -Value "$(Get-Date -Format o) hud: $msg" } catch { }
@@ -1278,12 +1299,15 @@ function Invoke-UpdateAction {
 # Salir del todo: HUD y hub. Sin el hub dejan de registrarse las sesiones, asi
 # que el menu lo dice con esas palabras y ofrece aparte cerrar solo el HUD.
 function Exit-Atalaya {
-    try {
-        $hubPidFile = Join-Path $StateDir "hub.pid"
-        $hubPid = [int](Get-Content $hubPidFile -Raw -ErrorAction Stop)
+    $hubPidFile = Join-Path $StateDir "hub.pid"
+    $hubPid = Get-OwnedPid $hubPidFile @("node")
+    if ($hubPid) {
         Stop-Process -Id $hubPid -Force -ErrorAction SilentlyContinue
+        Remove-Item $hubPidFile -Force -ErrorAction SilentlyContinue
         Write-HudLog "salida completa: hub detenido (pid $hubPid)"
-    } catch { }
+    } else {
+        Write-HudLog "salida completa: sin hub vivo que detener (hub.pid ausente o de otro proceso)"
+    }
     $window.Close()
 }
 
@@ -1608,7 +1632,13 @@ $window.Add_Closed({
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
         foreach ($hkId in 1..10) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
     } catch { }
-    try { Remove-Item (Join-Path $StateDir "hud.pid") -Force } catch { }
+    # Solo se borra el hud.pid si SIGUE siendo nuestro: si entretanto arranco
+    # otro HUD, el archivo ya lleva su numero y borrarlo lo dejaria invisible.
+    try {
+        if ((Get-Content $HudPidFile -Raw -ErrorAction Stop).Trim() -eq "$PID") {
+            Remove-Item $HudPidFile -Force
+        }
+    } catch { }
 })
 
 Write-HudLog "HUD iniciado (pid=$PID)"

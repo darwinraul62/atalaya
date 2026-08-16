@@ -223,19 +223,55 @@ function Get-Http([string]$url) {
 
 function Test-Hub { return $null -ne (Get-Http "$HubUrl/api/ping") }
 
-function Get-PidAlive([string]$pidFile) {
-    try {
-        $procId = [int](Get-Content $pidFile -Raw)
-        if (Get-Process -Id $procId -ErrorAction Stop) { return $procId }
-    } catch { }
-    return $null
+# Nombres de proceso legitimos de cada .pid. El HUD corre dentro de Atalaya.exe
+# (anfitrion nativo) o, si no se pudo compilar, en powershell/pwsh; el hub es
+# siempre node.
+$HudProcNames = @("Atalaya", "powershell", "pwsh")
+$HubProcNames = @("node")
+
+# Un archivo .pid solo es de fiar si el proceso que vive con ese numero es
+# REALMENTE el nuestro. Windows RECICLA los identificadores de proceso: si el
+# HUD muere sin borrar su hud.pid (apagado, cierre forzado), al siguiente
+# arranque ese mismo numero puede pertenecer a otro programa cualquiera. Paso
+# de verdad: hud.pid quedo con el 10884 y al reiniciar ese 10884 era OneDrive,
+# asi que el lanzador creyo "HUD ya activo" y no arranco nada -- y un -Stop
+# habria matado a OneDrive. Dos comprobaciones baratas y decisivas:
+#   1) el nombre del proceso esta en la lista esperada;
+#   2) el proceso arranco ANTES de que se escribiera el archivo: su dueno lo
+#      escribe nada mas nacer, luego un numero reciclado pertenece siempre a un
+#      proceso POSTERIOR al archivo.
+# Ante la duda se devuelve $null: arrancar un HUD de mas es molesto, matar el
+# proceso de otro es grave.
+function Get-PidAlive([string]$pidFile, [string[]]$names = @()) {
+    if (-not (Test-Path $pidFile)) { return $null }
+    $procId = 0
+    try { $procId = [int]((Get-Content $pidFile -Raw -ErrorAction Stop).Trim()) } catch { return $null }
+    if ($procId -le 0) { return $null }
+    $proc = Get-Process -Id $procId -ErrorAction SilentlyContinue
+    if (-not $proc) { return $null }
+    if (@($names).Count -gt 0 -and @($names) -notcontains $proc.ProcessName) { return $null }
+    $written = (Get-Item $pidFile -ErrorAction SilentlyContinue).LastWriteTime
+    # StartTime lanza excepcion en procesos protegidos del sistema; si no hay
+    # dato nos quedamos con la comprobacion del nombre.
+    $started = $null
+    try { $started = $proc.StartTime } catch { }
+    if ($written -and $started -and $started -gt $written) { return $null }
+    return $procId
 }
 
 function Stop-Atalaya {
-    $hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid")
+    $hudFile = Join-Path $StateDir "hud.pid"
+    $hubFile = Join-Path $StateDir "hub.pid"
+    $hudPid = Get-PidAlive $hudFile $HudProcNames
     if ($hudPid) { Stop-Process -Id $hudPid -Force; Write-Host "HUD detenido (pid $hudPid)" }
-    $hubPid = Get-PidAlive (Join-Path $StateDir "hub.pid")
+    $hubPid = Get-PidAlive $hubFile $HubProcNames
     if ($hubPid) { Stop-Process -Id $hubPid -Force; Write-Host "Hub detenido (pid $hubPid)" }
+    # Matar a lo bruto se salta la limpieza que hace el HUD al cerrarse: si no
+    # borramos aqui los .pid, quedan huerfanos y listos para apuntar a un
+    # proceso ajeno en cuanto Windows recicle el numero.
+    foreach ($f in @($hudFile, $hubFile)) {
+        Remove-Item $f -Force -ErrorAction SilentlyContinue
+    }
     if (-not $hudPid -and -not $hubPid) { Write-Host "Nada que detener." }
 }
 
@@ -520,7 +556,7 @@ if ($Status) {
     } else {
         Write-Host "Hub: no responde en $HubUrl"
     }
-    $hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid")
+    $hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid") $HudProcNames
     if ($hudPid) { Write-Host "HUD: activo (pid $hudPid)" } else { Write-Host "HUD: detenido" }
     exit 0
 }
@@ -574,14 +610,32 @@ if ($Doctor) {
     }
     if (Test-Hub) { Write-Host "[+] Hub: activo en $HubUrl" }
     else { Write-Host "[-] Hub: no responde (arranca con: atalaya)" }
-    $hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid")
+    $hudPidFile = Join-Path $StateDir "hud.pid"
+    $hudPid = Get-PidAlive $hudPidFile $HudProcNames
     if ($hudPid) {
         $hudProc = (Get-Process -Id $hudPid -ErrorAction SilentlyContinue).ProcessName
         Write-Host "[+] HUD: activo (pid $hudPid, proceso '$hudProc')"
         if ($hudProc -ne "Atalaya") {
             Write-Host "    [-] corriendo bajo PowerShell: reinicia el HUD para que tome la identidad de Atalaya"
         }
-    } else { Write-Host "[-] HUD: detenido" }
+    } else {
+        Write-Host "[-] HUD: detenido"
+        # Un hud.pid que sobrevive al HUD es la causa clasica de "arranco pero
+        # no veo la pildora": el lanzador lo lee, encuentra vivo el numero
+        # (reciclado por otro programa) y se ahorra el arranque. Aqui se avisa
+        # con nombre y apellido, y se retira.
+        if (Test-Path $hudPidFile) {
+            $stale = 0
+            try { $stale = [int]((Get-Content $hudPidFile -Raw).Trim()) } catch { }
+            $intruso = (Get-Process -Id $stale -ErrorAction SilentlyContinue).ProcessName
+            if ($intruso) {
+                Write-Host "    [-] hud.pid huerfano: el pid $stale es ahora de '$intruso'; lo retiro"
+            } else {
+                Write-Host "    [-] hud.pid huerfano (pid $stale ya no existe); lo retiro"
+            }
+            Remove-Item $hudPidFile -Force -ErrorAction SilentlyContinue
+        }
+    }
     if (Test-Path $HostExe) {
         $hv = (Get-Item $HostExe).VersionInfo.FileVersion
         Write-Host "[+] Atalaya.exe: presente (v$hv) - el HUD corre como aplicacion propia"
@@ -940,7 +994,7 @@ if (Test-Hub) {
     exit 1
 }
 
-$hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid")
+$hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid") $HudProcNames
 if ($hudPid) {
     Write-Host "HUD: ya activo (pid $hudPid)"
 } else {

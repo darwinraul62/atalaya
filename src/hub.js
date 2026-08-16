@@ -22,7 +22,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.17.0";
+const VERSION = "0.17.1";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -51,6 +51,49 @@ const PS_ARGS = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-WindowStyle", "Hi
 function hudLaunchCommand() {
   if (fs.existsSync(HOST_EXE)) return [HOST_EXE, ["--hud"]];
   return ["powershell.exe", [...PS_ARGS, HUD_PS1]];
+}
+
+// Windows RECICLA los números de proceso. Un hud.pid que sobrevivió a su dueño
+// (el HUD murió sin limpiar: apagado, cierre forzado) puede apuntar mañana a
+// cualquier otro programa — nos pasó de verdad con OneDrive heredando el número
+// del HUD del día anterior. Matar a ciegas por ese número es matar a un
+// inocente, así que antes se comprueba que la imagen del proceso sea justo la
+// que este hub lanzaría como HUD. `tasklist` viene con Windows y responde en
+// milisegundos. Si no se puede confirmar, se devuelve null y NO se mata nada:
+// arrancar un HUD de más es molesto, cerrar el proceso de otro es grave.
+function verifiedHudPid() {
+  return new Promise((resolve) => {
+    const pidFile = path.join(STATE_DIR, "hud.pid");
+    let hudPid = 0;
+    try {
+      hudPid = Number(String(fs.readFileSync(pidFile, "utf8")).trim());
+    } catch {
+      return resolve(null);
+    }
+    if (!Number.isInteger(hudPid) || hudPid <= 0) return resolve(null);
+    const expected = path.basename(hudLaunchCommand()[0]).toLowerCase();
+    execFile(
+      "tasklist",
+      ["/FI", `PID eq ${hudPid}`, "/NH", "/FO", "CSV"],
+      { windowsHide: true, timeout: 5000 },
+      (err, stdout) => {
+        if (err) return resolve(null);
+        // Una fila CSV por proceso: "imagen.exe","pid","sesion",...
+        const row = String(stdout).match(/^"([^"]+)"/m);
+        const image = row ? row[1].toLowerCase() : "";
+        if (image === expected) return resolve(hudPid);
+        log(
+          `hud.pid descartado: el pid ${hudPid} es de "${image || "nadie"}", no de "${expected}"`,
+        );
+        try {
+          fs.unlinkSync(pidFile); // huérfano confirmado: fuera, antes de que engañe a otro
+        } catch {
+          /* da igual */
+        }
+        resolve(null);
+      },
+    );
+  });
 }
 
 const STALE_HOURS = 12; // sesiones sin actividad más antiguas no se muestran
@@ -1106,12 +1149,11 @@ const server = http.createServer(async (req, res) => {
   if (route === "POST /api/hud/restart") {
     if (process.platform !== "win32") return json(res, 409, { error: "solo Windows" });
     try {
-      const pidFile = path.join(STATE_DIR, "hud.pid");
-      if (fs.existsSync(pidFile)) {
-        const hudPid = Number(fs.readFileSync(pidFile, "utf8"));
-        if (Number.isInteger(hudPid) && hudPid > 0) {
-          try { process.kill(hudPid); } catch { /* ya no corre */ }
-        }
+      // Solo se mata lo que se pudo confirmar que es nuestro HUD; el arranque
+      // va siempre, porque si no había HUD vivo esto es justo lo que se pide.
+      const hudPid = await verifiedHudPid();
+      if (hudPid) {
+        try { process.kill(hudPid); } catch { /* ya no corre */ }
       }
       setTimeout(() => {
         // OJO: sin detached — en Windows separa al hijo de la consola y

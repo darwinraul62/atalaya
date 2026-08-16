@@ -4,6 +4,38 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.17.1] - 2026-08-16
+
+### Corregido
+- **El HUD podía no arrancar al iniciar Windows, y peor: podía matarse a un
+  programa ajeno.** Windows **recicla** los identificadores de proceso. Si el
+  HUD moría sin limpiar su `hud.pid` (apagado, cierre forzado), al siguiente
+  arranque ese mismo número podía pertenecer a cualquier otro programa — pasó
+  de verdad, lo heredó OneDrive. Como solo se comprobaba *que el número
+  existiera*, el lanzador daba por vivo un HUD que no estaba (arrancabas
+  Atalaya y no aparecía la píldora), y `-Stop`, el "Salir" de la bandeja y el
+  reinicio del HUD desde Ajustes habrían **cerrado el proceso del intruso**.
+  Ahora un `.pid` solo vale si el proceso que lo ocupa **se llama** como
+  corresponde (`Atalaya`/`powershell`/`pwsh` para el HUD, `node` para el hub)
+  **y arrancó antes** de que se escribiera el archivo: su dueño lo escribe nada
+  más nacer, así que un número reciclado es siempre posterior al archivo. Ante
+  la duda no se mata nada.
+  - `-Stop` borra los `.pid` después de parar: matar a la fuerza se salta la
+    limpieza y era la propia orden la que fabricaba huérfanos.
+  - Al cerrarse, el HUD solo borra `hud.pid` si todavía es suyo (si entretanto
+    arrancó otro, el archivo ya lleva su número).
+  - En el hub la comprobación usa `tasklist` contra la imagen que él mismo
+    lanzaría; si no puede confirmarla no mata, pero sí arranca el HUD, que es
+    lo que se pedía.
+- `-Doctor` señala al okupa por su nombre (`el pid 10884 es ahora de
+  'OneDrive'`) y retira el `hud.pid` huérfano.
+
+### Añadido
+- `tools\test-pid.ps1` (+ `tools\test-pid.mjs`): prueba de regresión de esa
+  validación en las dos capas, PowerShell y Node. Fabrica sus propios procesos
+  de usar y tirar, así que no depende de lo que haya abierto en la máquina ni
+  toca la instalación real.
+
 ## [0.17.0] - 2026-08-07
 
 Endurece los tres flujos de ciclo de vida (instalar, actualizar, desinstalar)

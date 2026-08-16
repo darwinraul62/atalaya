@@ -494,4 +494,8 @@ etiqueta informativa heredada (opcional).
 - El hook **nunca** escribe a stdout ni falla (exit 0 siempre) para no
   interferir con Claude Code; sus errores van a `hook-errors.log`.
 - Si el HUD marca "sin conexión": ejecuta `atalaya.cmd` (rearranca el hub).
+- Si Atalaya arrancó pero **no ves la píldora**, y `atalaya -Status` insiste en
+  que el HUD está activo: ejecuta `atalaya -Doctor`. Detecta y retira los
+  `hud.pid` huérfanos (Windows recicla los identificadores de proceso, así que
+  un archivo que sobrevivió a su dueño puede apuntar a otro programa).
 - Puerto configurable con la variable de entorno `ATALAYA_PORT` (por defecto 4777).
