@@ -13,6 +13,12 @@
 # Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin
 # BOM.
 #
+# REGLA IMPORTANTE: NO registres manejadores de eventos con .GetNewClosure().
+# Hospedado en bin\Atalaya.exe esos manejadores NO se ejecutan, y falla en
+# SILENCIO: ni excepcion ni linea en el log (lanzando powershell.exe -File
+# funcionan, asi que no se nota probando a mano). Pasa el estado por .Tag del
+# control, por otra de sus propiedades, o por una variable $script:.
+#
 # Los dos parametros existen para poder levantar un HUD contra un hub de
 # PRUEBAS sin tocar la instalacion real (es lo que usa la generacion de
 # capturas del README). En uso normal no se pasan.
@@ -41,8 +47,34 @@ public static class AtalayaHotkey {
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int cmd);
     [DllImport("user32.dll")] static extern bool IsWindow(IntPtr h);
     [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int w, int hh, uint flags);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr h);
+    [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
+    [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
 
     public static long Foreground() { return GetForegroundWindow().ToInt64(); }
+
+    // El puntero esta FISICAMENTE sobre esta ventana? El IsMouseOver de WPF se
+    // cae en falso durante un instante cada vez que se reconstruye el
+    // contenido bajo el cursor (el deck se repinta cada 3 s), y eso bastaba
+    // para que el deck se esfumara justo cuando ibas a pulsar un boton.
+    public static bool PointerOver(long h) {
+        IntPtr w = new IntPtr(h);
+        if (h == 0 || !IsWindow(w)) return false;
+        RECT r; if (!GetWindowRect(w, out r)) return false;
+        POINT p; if (!GetCursorPos(out p)) return false;
+        return p.X >= r.L && p.X <= r.R && p.Y >= r.T && p.Y <= r.B;
+    }
+
+    // Pasa el foco de teclado a una ventana propia SIN usar Window.Activate()
+    // de WPF: sobre el deck (topmost, translucido, ShowActivated=False y
+    // anclado a todos los escritorios) esa llamada MATA el proceso del HUD.
+    // SetForegroundWindow hace lo justo y, si Windows lo deniega por el
+    // bloqueo de primer plano, simplemente devuelve false.
+    public static bool BringToFront(long h) {
+        IntPtr w = new IntPtr(h);
+        if (h == 0 || !IsWindow(w)) return false;
+        return SetForegroundWindow(w);
+    }
 
     [StructLayout(LayoutKind.Sequential)]
     public struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
@@ -129,6 +161,9 @@ $Hotkeys = @{
     prevDesktop = "Ctrl+Alt+Left"
     newDesktop  = "none"
     toggleDeck  = "none"
+    renameDesktop = "Ctrl+Alt+R"
+    moveDeskPrev  = "Ctrl+Alt+Shift+Left"
+    moveDeskNext  = "Ctrl+Alt+Shift+Right"
     pinSession  = "Ctrl+Alt+S"
     clearWindow = "Ctrl+Alt+U"
     pomodoro    = "Ctrl+Alt+P"
@@ -230,6 +265,7 @@ $GlyphCoffee = [char]::ConvertFromUtf32(0x2615)   # cafe: pomodoro en descanso
 $GlyphReset  = [char]::ConvertFromUtf32(0x1F504)  # flechas circulares: reiniciar pomodoro
 $GlyphUp     = [char]::ConvertFromUtf32(0x25B2)   # triangulo arriba: abrir el deck
 $GlyphDown   = [char]::ConvertFromUtf32(0x25BC)   # triangulo abajo: cerrar el deck
+$GlyphPencil = [char]::ConvertFromUtf32(0x270E)   # lapiz: renombrar el escritorio
 
 $xaml = @"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
@@ -459,6 +495,34 @@ function Go-NextDesktop       { Invoke-VDesk "/Wrap /Right" }
 function Go-PrevDesktop       { Invoke-VDesk "/Wrap /Left" }
 function New-VirtualDesktop   { Invoke-VDesk "/New /Switch" }
 
+# Reordenar va POR EL HUB (a diferencia de moverse entre escritorios): al
+# cambiar de sitio uno, TODOS los numeros de detras se corren, y el hub es
+# quien tiene que reindexar las ventanas ya capturadas y vaciar sus caches.
+function Move-Desktop([int]$num, [int]$delta) {
+    if ($delta -eq 0) { return }
+    [void](Invoke-HubPost "/api/desktops/move" ('{"desktop":' + $num + ',"delta":' + $delta + '}'))
+    # El hub tarda un instante en aplicarlo; se repinta despues para que el
+    # deck no muestre el orden viejo.
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(600)
+    $t.Add_Tick({ param($src, $e) $src.Stop(); Update-Hud })
+    $t.Start()
+}
+
+function Get-CurrentDesktopNum {
+    if ($script:LastSummary -and $script:LastSummary.currentDesktop -and
+        $null -ne $script:LastSummary.currentDesktop.num) {
+        return [int]$script:LastSummary.currentDesktop.num
+    }
+    return -1
+}
+
+function Move-CurrentDesktop([int]$delta) {
+    $n = Get-CurrentDesktopNum
+    if ($n -lt 0) { return }
+    Move-Desktop $n $delta
+}
+
 function Jump-Urgent {
     # Pide al hub saltar a la sesion que lleva mas tiempo esperando
     [void](Invoke-HubPost "/api/sessions/jump" '{"urgent":true}')
@@ -572,7 +636,7 @@ function Update-Hud {
                 elseif ($busy) { $ColWork } else { $ColInk2 }
             if ($isCur -or $urgent) { $tb.FontWeight = "SemiBold" }
             $b.Child = $tb
-            $tip = "$($d.name): clic para ir"
+            $tip = "$($d.name): clic para ir - clic derecho para renombrarlo"
             if ($busy) { $tip += " - $($d.working) trabajando" }
             if ($urgent) { $tip += " - $($d.needs_you) esperando tu respuesta" }
             $b.ToolTip = $tip
@@ -582,6 +646,15 @@ function Update-Hud {
                 $e.Handled = $true   # que no arranque el arrastre de la pastilla
                 Go-Desktop ([int]$src.Tag)
             })
+            # Los nombres ya estan a la vista en la pastilla: el clic derecho
+            # sobre el nombre es el camino mas corto para cambiarlo (Handled
+            # ademas evita que salga el menu contextual de la pildora).
+            $b.Add_MouseRightButtonUp({
+                param($src, $e)
+                $e.Handled = $true
+                Start-RenameDesktop ([int]$src.Tag)
+            })
+            $b.Add_MouseRightButtonDown({ param($src, $e) $e.Handled = $true })
             [void]$deskBtns.Children.Add($b)
         }
     }
@@ -688,9 +761,11 @@ function New-DeckText([string]$text, $brush, [double]$size, [double]$width, [boo
 # Feedback de hover en filas clicables (no pisa el fondo ambar de urgencia)
 function Add-RowHover($row, [bool]$urgent) {
     if ($urgent) { return }
-    $orig = $row.Background
-    $row.Add_MouseEnter({ param($src, $e) $src.Background = $BgRowHov }.GetNewClosure())
-    $row.Add_MouseLeave({ param($src, $e) $src.Background = $orig }.GetNewClosure())
+    # El fondo original viaja en una propiedad del propio control, no en una
+    # clausura (ver New-DeckIconBtn: las clausuras no se ejecutan hospedadas).
+    $row.DataContext = $row.Background
+    $row.Add_MouseEnter({ param($src, $e) $src.Background = $BgRowHov })
+    $row.Add_MouseLeave({ param($src, $e) $src.Background = $src.DataContext })
 }
 
 function New-DeckSep {
@@ -704,50 +779,220 @@ function New-DeckBtn([string]$text, $brush, [double]$size, [string]$tip, [script
     $tb = New-DeckText $text $brush $size 0 $bold
     $tb.Cursor = "Hand"
     if ($tip) { $tb.ToolTip = $tip }
+    # Un TextBlock sin fondo SOLO responde sobre el trazo de sus glifos: un
+    # lapiz o una flecha de 8 px es un blanco casi imposible de acertar. Con
+    # un fondo transparente (que NO es lo mismo que sin fondo) responde toda
+    # su caja, y el relleno la agranda hasta un tamanio comodo.
+    $tb.Background = [Windows.Media.Brushes]::Transparent
+    $tb.Padding = "4,3"
     $tb.Add_MouseLeftButtonUp($onClick)
     $tb.Add_MouseEnter({ param($src, $e) $src.Opacity = 0.75 })
     $tb.Add_MouseLeave({ param($src, $e) $src.Opacity = 1.0 })
     return $tb
 }
 
+# Boton de icono para las FILAS del deck. A diferencia de New-DeckBtn no
+# devuelve el TextBlock pelado: lo mete en un Border con fondo y tamanio
+# explicitos. Un TextBlock solo responde al mouse donde el propio texto se
+# dibuja, y un glifo de 8 px encima de una fila que YA es clicable era
+# imposible de acertar: el clic se lo quedaba la fila. Un Border con fondo
+# responde en TODO su rectangulo, que es como estan hechos los botones de
+# escritorio de la pildora (esos nunca fallaron).
+#
+# Reacciona al SOLTAR, no al pulsar: el deck es topmost y no se activa al
+# hacerle clic, y en ese caso Windows se COME el boton de bajada de la primera
+# pulsacion (WM_MOUSEACTIVATE con "and eat"). La subida siempre llega: por eso
+# la fila, que escucha ahi, nunca fallo. Marcar el evento como atendido evita
+# que la fila actue tambien.
+function New-DeckIconBtn([string]$text, [double]$size, [string]$tip, [scriptblock]$onClick, [bool]$dim, $tag) {
+    $tb = New-DeckText $text $ColInk3 $size 0 $false
+    $tb.HorizontalAlignment = "Center"
+    $b = New-Object Windows.Controls.Border
+    $b.Background = [Windows.Media.Brushes]::Transparent
+    $b.CornerRadius = 5
+    $b.Width = 24; $b.Height = 22
+    $b.Child = $tb
+    $b.Cursor = "Hand"
+    # El dato viaja en Tag, NO en una clausura: los manejadores creados con
+    # GetNewClosure() no llegan a ejecutarse cuando el HUD corre hospedado en
+    # Atalaya.exe. Los botones de escritorio de la pildora siempre han usado
+    # este patron y nunca fallaron.
+    $b.Tag = $tag
+    if ($tip) { $b.ToolTip = $tip }
+    if ($dim) { $b.Opacity = 0.25; $b.Cursor = "Arrow" }
+    $b.Add_MouseLeftButtonUp($onClick)
+    $b.Add_MouseLeftButtonDown({ param($src, $e) $e.Handled = $true })
+    if (-not $dim) {
+        $b.Add_MouseEnter({ param($src, $e) $src.Background = $BgRowHov })
+        $b.Add_MouseLeave({ param($src, $e) $src.Background = [Windows.Media.Brushes]::Transparent })
+    }
+    return $b
+}
+
 # Mientras se edita, Update-Deck NO reconstruye (si no, el tick de 3 s
 # destruye la caja de texto a mitad de escritura).
 $script:DeckEditing = $false
+# Filas del deck por numero de escritorio: lo que permite arrancar el
+# renombrado "a distancia" (hotkey, chip de la pildora) sin buscar a mano.
+$script:DeckRows = @{}
 
 function Stop-DeckEdit {
     $script:DeckEditing = $false
     Update-Hud
+    # Si el mouse ya no esta encima (caso tipico del renombrado por hotkey),
+    # el deck se retira solo en cuanto termina la edicion.
+    if (-not $script:DeckPinned -and -not $deck.IsMouseOver -and -not $window.IsMouseOver) {
+        $script:DeckHideTimer.Start()
+    }
+}
+
+# Aplica el nombre y cierra la edicion. El hub tarda un instante en que
+# VirtualDesktop.exe lo confirme, de ahi el margen antes de repintar.
+function Set-DeskName([int]$num, [string]$name) {
+    $name = ([string]$name).Trim()
+    if (-not $name) { Stop-DeckEdit; return }
+    $body = @{ desktop = $num; name = $name } | ConvertTo-Json -Compress
+    [void](Invoke-HubPost "/api/desktops/name" $body)
+    $t = New-Object System.Windows.Threading.DispatcherTimer
+    $t.Interval = [TimeSpan]::FromMilliseconds(700)
+    $t.Add_Tick({ param($src, $e) $src.Stop(); Stop-DeckEdit })
+    $t.Start()
 }
 
 function Start-DeckRename($d, $row) {
+    try {
     $script:DeckEditing = $true
+    # Mientras se escribe el deck NO se puede esconder por alejar el mouse
+    $script:DeckHideTimer.Stop()
+    $num = [int]$d.num
+    Write-HudLog "renombrando escritorio $num ('$($d.name)')"
+
+    # Nombres ya usados: casi siempre el que se busca esta aqui, y entonces
+    # renombrar cuesta un clic (o Tab) en vez de teclear el nombre entero.
+    # Se recortan a 8 para que lo que se VE sea exactamente lo que Tab y las
+    # flechas recorren: una lista mas larga que las fichas seria confusa.
+    $sug = @()
+    if ($script:LastSummary -and $script:LastSummary.deskNames) {
+        $sug = @($script:LastSummary.deskNames |
+            Where-Object { $_ -and ([string]$_) -ne ([string]$d.name) } |
+            Select-Object -First 8)
+    }
+    # Estado de la edicion en curso (solo puede haber una): asi los
+    # manejadores de teclas y de las fichas NO necesitan clausura.
+    $script:RenameNum = $num
+    $script:RenameSug = $sug
+
+    $box = New-Object Windows.Controls.StackPanel
     $tb = New-Object Windows.Controls.TextBox
     $tb.Text = [string]$d.name; $tb.FontSize = 12.5; $tb.Width = 300
     $tb.Background = $BgRowCur; $tb.Foreground = $ColInk; $tb.BorderBrush = $ColChrome
     $tb.Padding = "4,2"
-    $num = [int]$d.num
-    $row.Child = $tb
-    $deck.Activate()
-    [void]$tb.Focus(); $tb.SelectAll()
-    $tb.Add_KeyDown({
-        param($src, $e2)
-        if ($e2.Key -eq "Return") {
-            $name = $src.Text.Trim()
-            if ($name) {
-                $body = @{ desktop = $num; name = $name } | ConvertTo-Json -Compress
-                [void](Invoke-HubPost "/api/desktops/name" $body)
-            }
-            # pequenio margen para que el hub aplique el rename antes de refrescar
-            $t = New-Object System.Windows.Threading.DispatcherTimer
-            $t.Interval = [TimeSpan]::FromMilliseconds(700)
-            $t.Add_Tick({ $t.Stop(); Stop-DeckEdit }.GetNewClosure())
-            $t.Start()
-        } elseif ($e2.Key -eq "Escape") {
-            Stop-DeckEdit
+    $tb.ToolTip = "Enter guarda - Esc cancela - Tab completa con un nombre ya usado - flechas los recorren"
+    [void]$box.Children.Add($tb)
+
+    if ($sug.Count) {
+        $hint = New-DeckText "Tab completa - flechas recorren - clic aplica" $ColInk3 10 0 $false
+        $hint.Margin = "2,4,0,2"
+        [void]$box.Children.Add($hint)
+        $chips = New-Object Windows.Controls.WrapPanel
+        $chips.Width = 300
+        foreach ($n in $sug) {
+            $name = [string]$n
+            # El nombre viaja en Tag (sin clausura, ver New-DeckIconBtn)
+            $chip = New-DeckBtn $name $ColChrome 11 "Renombrar a `"$name`"" {
+                param($src, $e3)
+                $e3.Handled = $true
+                Set-DeskName $script:RenameNum ([string]$src.Tag)
+            } $false
+            $chip.Tag = $name
+            $chip.Margin = "2,1,8,1"
+            [void]$chips.Children.Add($chip)
         }
-    }.GetNewClosure())
+        [void]$box.Children.Add($chips)
+    }
+
+    $row.Child = $box
+    # NO usar $deck.Activate(): sobre esta ventana tumba el proceso del HUD
+    # (ver AtalayaHotkey.BringToFront). Con el hwnd al frente basta para que
+    # el teclado entre en la caja.
+    if ($script:DeckHwnd -and -not [AtalayaHotkey]::BringToFront($script:DeckHwnd)) {
+        # Windows puede negar el primer plano. No es grave: la caja sigue
+        # abierta y un clic en ella da el foco de la forma normal.
+        Write-HudLog "renombrar: Windows nego el primer plano al deck (clic en la caja para escribir)"
+    }
+    [void]$tb.Focus(); $tb.SelectAll()
+
+    # Indice del recorrido con flechas: -1 = "lo que el usuario escribio"
+    $script:RenameIdx = -1
+    # Sin clausura: todo lo que necesita esta en $script:Rename* (ver arriba)
+    $tb.Add_PreviewKeyDown({
+        param($src, $e2)
+        $sg = $script:RenameSug
+        if ($e2.Key -eq "Return") {
+            $e2.Handled = $true
+            Set-DeskName $script:RenameNum $src.Text
+        } elseif ($e2.Key -eq "Escape") {
+            $e2.Handled = $true
+            Stop-DeckEdit
+        } elseif ($e2.Key -eq "Tab") {
+            # Completar con el primer nombre usado que empiece como lo tecleado
+            $e2.Handled = $true
+            if ($sg.Count) {
+                # Si sigue TODO seleccionado, aun no se ha tecleado nada (la
+                # siguiente tecla lo reemplazaria): Tab ofrece la primera
+                # sugerencia en vez de buscar por un prefijo que nadie escribio.
+                $typed = if ($src.SelectionLength -ge $src.Text.Length) { "" }
+                    else { $src.Text.Trim() }
+                $hit = $sg | Where-Object {
+                    -not $typed -or ([string]$_).StartsWith(
+                        $typed, [System.StringComparison]::CurrentCultureIgnoreCase)
+                } | Select-Object -First 1
+                if ($hit) { $src.Text = [string]$hit; $src.CaretIndex = $src.Text.Length }
+            }
+        } elseif ($e2.Key -eq "Down" -or $e2.Key -eq "Up") {
+            $e2.Handled = $true
+            if ($sg.Count) {
+                $step = if ($e2.Key -eq "Down") { 1 } else { -1 }
+                $script:RenameIdx = ($script:RenameIdx + $step) % $sg.Count
+                if ($script:RenameIdx -lt 0) { $script:RenameIdx += $sg.Count }
+                $src.Text = [string]$sg[$script:RenameIdx]
+                $src.CaretIndex = $src.Text.Length
+            }
+        }
+    })
     $tb.Add_LostFocus({ if ($script:DeckEditing) { Stop-DeckEdit } })
+    } catch {
+        Write-HudLog "Start-DeckRename error: $_ (linea $($_.InvocationInfo.ScriptLineNumber))"
+        $script:DeckEditing = $false
+    }
 }
+
+# Renombrar el escritorio <num> desde fuera del deck: lo abre si hace falta,
+# lo pone en la vista de escritorios y deja el cursor en la fila correcta.
+function Start-RenameDesktop([int]$num) {
+    try {
+    if ($num -lt 0) { return }
+    # Si ya se estaba editando basta con bajar la bandera: llamar a
+    # Stop-DeckEdit haria un Update-Hud (peticion HTTP sincrona, hasta 1,5 s)
+    # justo en la ruta que tiene que responder al instante, y el Update-Deck
+    # de aqui abajo repinta igual.
+    $script:DeckEditing = $false
+    if ($script:DeckView -ne "desks") { $script:DeckView = "desks" }
+    if (-not $deck.IsVisible) {
+        Show-Deck
+    } else {
+        Update-Deck $script:LastSummary
+        Position-Deck
+    }
+    $entry = $script:DeckRows[$num]
+    if ($entry) { Start-DeckRename $entry.Data $entry.Row }
+    else { Write-HudLog "renombrar: no encuentro la fila del escritorio $num" }
+    } catch {
+        Write-HudLog "Start-RenameDesktop error: $_ (linea $($_.InvocationInfo.ScriptLineNumber))"
+    }
+}
+
+function Rename-CurrentDesktop { Start-RenameDesktop (Get-CurrentDesktopNum) }
 
 function Set-DeckView([string]$v) {
     $script:DeckView = $v
@@ -863,6 +1108,9 @@ function Update-Deck($s) {
             @{ K = $Hotkeys.prevDesktop; D = "Escritorio anterior (con vuelta)" },
             @{ K = $Hotkeys.nextDesktop; D = "Escritorio siguiente (con vuelta)" },
             @{ K = $Hotkeys.newDesktop;  D = "Crear escritorio nuevo e ir a el" },
+            @{ K = $Hotkeys.renameDesktop; D = "Renombrar el escritorio actual (Enter guarda)" },
+            @{ K = $Hotkeys.moveDeskPrev; D = "Mover el escritorio actual a la izquierda" },
+            @{ K = $Hotkeys.moveDeskNext; D = "Mover el escritorio actual a la derecha" },
             @{ K = $Hotkeys.toggleDeck;  D = "Mostrar/ocultar este deck" },
             @{ K = $Hotkeys.pinSession;  D = "Favorito: fijar/quitar la ventana activa" },
             @{ K = $Hotkeys.clearWindow; D = "Apartar la ventana activa de la pildora" },
@@ -884,6 +1132,9 @@ function Update-Deck($s) {
             @{ K = "arrastrar pildora";   D = "moverla (con esquina fija vuelve sola)" },
             @{ K = "clic contador";       D = "ir a la sesion mas antigua en ese estado" },
             @{ K = "clic boton escritorio"; D = "cambiar a ese escritorio" },
+            @{ K = "clic der. boton esc."; D = "renombrar ESE escritorio desde la pildora" },
+            @{ K = "$GlyphPencil de la fila"; D = "renombrar (Tab completa con nombres ya usados)" },
+            @{ K = "$GlyphUp$GlyphDown de la fila"; D = "reordenar: subir o bajar ese escritorio" },
             @{ K = "clic derecho fila";   D = "renombrar escritorio / quitar favorito" },
             @{ K = "clic derecho pildora"; D = "menu de acciones" }
         )
@@ -945,6 +1196,10 @@ function Update-Deck($s) {
         return
     }
 
+    # Cuantos escritorios REALES hay (la entrada "sin escritorio" no cuenta):
+    # marca hasta donde puede bajar el ultimo con las flechas de reorden.
+    $deskRowCount = @($s.deck | Where-Object { $null -ne $_.num }).Count
+    $script:DeckRows = @{}
     foreach ($d in $s.deck) {
         $row = New-Object Windows.Controls.Border
         $row.CornerRadius = 8; $row.Padding = "8,5"; $row.Margin = "0,1,0,1"
@@ -973,19 +1228,55 @@ function Update-Deck($s) {
         $wt.TextAlignment = "Right"
         [void]$line.Children.Add($wt)
 
-        $row.Child = $line
         if ($null -ne $d.num) {
             $num = [int]$d.num
             $dd = $d
-            $row.ToolTip = "Clic: ir a este escritorio - Clic derecho: renombrarlo"
+            # Controles de la fila: renombrar y reordenar SIEMPRE a la vista
+            # (antes el renombrado solo existia como clic derecho invisible).
+            $canUp = $num -gt 0
+            $canDn = $num -lt ($deskRowCount - 1)
+            $edit = New-DeckIconBtn ([string]$GlyphPencil) 12.5 `
+                "Renombrar este escritorio ($($Hotkeys.renameDesktop) en el actual)" {
+                    param($src, $e)
+                    $e.Handled = $true
+                    Start-RenameDesktop ([int]$src.Tag)
+                } $false $num
+            $edit.Margin = "6,0,0,0"
+            [void]$line.Children.Add($edit)
+            $up = New-DeckIconBtn ([string]$GlyphUp) 11 `
+                "Subirlo un puesto ($($Hotkeys.moveDeskPrev) en el actual)" {
+                    param($src, $e)
+                    $e.Handled = $true
+                    Move-Desktop ([int]$src.Tag) -1
+                } (-not $canUp) $num
+            $up.Margin = "4,0,0,0"
+            [void]$line.Children.Add($up)
+            $dn = New-DeckIconBtn ([string]$GlyphDown) 11 `
+                "Bajarlo un puesto ($($Hotkeys.moveDeskNext) en el actual)" {
+                    param($src, $e)
+                    $e.Handled = $true
+                    Move-Desktop ([int]$src.Tag) 1
+                } (-not $canDn) $num
+            $dn.Margin = "2,0,0,0"
+            [void]$line.Children.Add($dn)
+
+            $row.Child = $line
+            $row.ToolTip = "Clic: ir a este escritorio - $GlyphPencil o clic derecho: renombrarlo - $GlyphUp$($GlyphDown): reordenarlo"
+            $row.Tag = $num
             $row.Add_MouseLeftButtonUp({
-                Go-Desktop $num
-            }.GetNewClosure())
+                param($src, $e)
+                if ($script:DeckEditing) { return }
+                Go-Desktop ([int]$src.Tag)
+            })
             $row.Add_MouseRightButtonUp({
-                Start-DeckRename $dd $row
-            }.GetNewClosure())
+                param($src, $e)
+                $e.Handled = $true
+                Start-RenameDesktop ([int]$src.Tag)
+            })
             Add-RowHover $row $urgent
+            $script:DeckRows[$num] = @{ Row = $row; Data = $dd }
         } else {
+            $row.Child = $line
             $row.ToolTip = "Sesiones aun sin escritorio detectado (enviales un prompt)"
             $row.Cursor = "Arrow"
         }
@@ -1028,7 +1319,14 @@ $script:DeckHideTimer = New-Object System.Windows.Threading.DispatcherTimer
 $script:DeckHideTimer.Interval = [TimeSpan]::FromMilliseconds($(if ($DeckOpen -eq "click") { 1200 } else { 450 }))
 $script:DeckHideTimer.Add_Tick({
     $script:DeckHideTimer.Stop()
-    if (-not $script:DeckPinned -and -not $deck.IsMouseOver -and -not $window.IsMouseOver) {
+    # Renombrando NO se esconde aunque el mouse se haya ido: se escribe con el
+    # teclado y perder la caja a media palabra es justo la friccion a evitar.
+    if ($script:DeckEditing) { return }
+    if ($script:DeckPinned) { return }
+    # El puntero real manda sobre el IsMouseOver de WPF (ver PointerOver)
+    if ([AtalayaHotkey]::PointerOver($script:DeckHwnd)) { return }
+    if ([AtalayaHotkey]::PointerOver($script:PillHwnd)) { return }
+    if (-not $deck.IsMouseOver -and -not $window.IsMouseOver) {
         Hide-Deck
     }
 })
@@ -1086,6 +1384,7 @@ function Toggle-DeckPin {
 
 $deck.Add_MouseEnter({ $script:DeckHideTimer.Stop(); $deck.Opacity = 1.0 })
 $deck.Add_MouseLeave({
+    if ($script:DeckEditing) { return }
     if ($script:DeckPinned) { $deck.Opacity = 0.5 } else { $script:DeckHideTimer.Start() }
 })
 
@@ -1415,6 +1714,15 @@ $miPanelMax.Add_Click({ Open-PanelMax })
 $miJump = New-Object System.Windows.Controls.MenuItem
 $miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = $Hotkeys.jumpUrgent
 $miJump.Add_Click({ Jump-Urgent })
+$miRename = New-Object System.Windows.Controls.MenuItem
+$miRename.Header = "Renombrar este escritorio"; $miRename.InputGestureText = $Hotkeys.renameDesktop
+$miRename.Add_Click({ Rename-CurrentDesktop })
+$miMovePrev = New-Object System.Windows.Controls.MenuItem
+$miMovePrev.Header = "Mover este escritorio a la izquierda"; $miMovePrev.InputGestureText = $Hotkeys.moveDeskPrev
+$miMovePrev.Add_Click({ Move-CurrentDesktop -1 })
+$miMoveNext = New-Object System.Windows.Controls.MenuItem
+$miMoveNext.Header = "Mover este escritorio a la derecha"; $miMoveNext.InputGestureText = $Hotkeys.moveDeskNext
+$miMoveNext.Add_Click({ Move-CurrentDesktop 1 })
 $miClear = New-Object System.Windows.Controls.MenuItem
 $miClear.Header = "Apartar la ultima ventana de la pildora"; $miClear.InputGestureText = $Hotkeys.clearWindow
 $miClear.Add_Click({ Invoke-ClearWindow })
@@ -1434,6 +1742,11 @@ $miExit.Add_Click({ $window.Close() })
 [void]$menu.Items.Add($miPanel)
 [void]$menu.Items.Add($miPanelMax)
 [void]$menu.Items.Add($miJump)
+[void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
+[void]$menu.Items.Add($miRename)
+[void]$menu.Items.Add($miMovePrev)
+[void]$menu.Items.Add($miMoveNext)
+[void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
 [void]$menu.Items.Add($miClear)
 [void]$menu.Items.Add($miPomo)
 [void]$menu.Items.Add($miHome)
@@ -1499,6 +1812,9 @@ $null = Add-TrayItem "Mostrar/ocultar el deck" $Hotkeys.toggleDeck {
     if ($script:PillHidden) { Show-Pill }
     if ($deck.IsVisible) { Hide-Deck } else { Show-Deck }
 }
+$null = Add-TrayItem "Renombrar el escritorio actual" $Hotkeys.renameDesktop { Rename-CurrentDesktop }
+$null = Add-TrayItem "Mover el escritorio a la izquierda" $Hotkeys.moveDeskPrev { Move-CurrentDesktop -1 }
+$null = Add-TrayItem "Mover el escritorio a la derecha" $Hotkeys.moveDeskNext { Move-CurrentDesktop 1 }
 $null = Add-TrayItem "Pomodoro: iniciar/pausar" $Hotkeys.pomodoro { Toggle-Pomodoro }
 $null = Add-TrayItem "Apartar la ventana activa" $Hotkeys.clearWindow { Invoke-ClearWindow }
 Add-TraySep
@@ -1539,6 +1855,9 @@ $HotkeyHook = {
             8 { Invoke-ClearWindow }
             9 { Toggle-Pomodoro }
             10 { Move-PillHome }
+            11 { Rename-CurrentDesktop }
+            12 { Move-CurrentDesktop -1 }
+            13 { Move-CurrentDesktop 1 }
         }
         $handled.Value = $true
     }
@@ -1560,7 +1879,10 @@ function Register-Hotkeys {
             @{ Id = 7; Spec = $Hotkeys.pinSession;  Name = "favorito de la ventana activa" },
             @{ Id = 8; Spec = $Hotkeys.clearWindow; Name = "apartar ventana de la pildora" },
             @{ Id = 9; Spec = $Hotkeys.pomodoro;    Name = "pomodoro iniciar/pausar" },
-            @{ Id = 10; Spec = $Hotkeys.recenterPill; Name = "recentrar la pildora" }
+            @{ Id = 10; Spec = $Hotkeys.recenterPill; Name = "recentrar la pildora" },
+            @{ Id = 11; Spec = $Hotkeys.renameDesktop; Name = "renombrar el escritorio actual" },
+            @{ Id = 12; Spec = $Hotkeys.moveDeskPrev; Name = "mover el escritorio a la izquierda" },
+            @{ Id = 13; Spec = $Hotkeys.moveDeskNext; Name = "mover el escritorio a la derecha" }
         )
         foreach ($hk in $wanted) {
             $parsed = ConvertTo-Hotkey $hk.Spec

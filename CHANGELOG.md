@@ -4,6 +4,73 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.18.0] - 2026-09-01
+
+Renombrar y reordenar escritorios deja de costar un viaje al panel: se hace
+desde donde ya estás mirando, y reciclar un nombre anterior es un clic.
+
+### Corregido
+- **Los manejadores creados con `GetNewClosure()` no se ejecutan cuando el HUD
+  corre hospedado en `bin\Atalaya.exe`.** Esta es la causa de fondo, y es una
+  trampa cara: el código es correcto, funciona perfectamente lanzando
+  `powershell.exe -File scripts\hud.ps1`, y hospedado **falla en silencio** —
+  ni excepción, ni una línea en el log. Se manifestaba en cascada: los botones
+  de la fila no respondían, `Enter` en la caja de renombrado no guardaba **ni
+  cerraba** la caja (el temporizador que la cierra también era una clausura), y
+  las filas nunca mostraban el realce al pasar el mouse.
+  Ahora ningún manejador del deck usa clausuras: el dato viaja en `Tag` (o en
+  variables `$script:` para la edición en curso, que sólo puede ser una), que
+  es como están hechos desde siempre los botones de escritorio de la píldora —
+  los únicos de la interfaz que nunca fallaron.
+  > Regla para este archivo: **no registres manejadores de eventos con
+  > `.GetNewClosure()`**. Pasa el estado por `Tag`, por una propiedad del
+  > control o por `$script:`.
+- **Los botones del deck eran casi imposibles de acertar.** Un `TextBlock` sin
+  fondo solo responde al mouse **sobre el trazo de sus glifos**: no es lo mismo
+  "sin fondo" que "fondo transparente". Con un lápiz o una flecha de 8 px eso
+  deja un blanco de unos pocos píxeles, y el clic caía en la fila (o en nada).
+  Ahora cada botón del deck lleva fondo transparente y relleno, así que
+  responde toda su caja, y se dispara al **pulsar** en vez de al soltar: en
+  estas ventanas topmost que no se activan al hacerles clic, el botón de
+  subida no siempre llega. Las flechas de reordenar además crecen a 11 px.
+- **Renombrar desde el deck mataba el HUD.** El clic derecho sobre una fila
+  abría la caja de texto y, al intentar darle el foco, `$deck.Activate()`
+  tumbaba el proceso entero: la píldora desaparecía sin dejar ni un rastro en
+  el log (es un desbordamiento de pila, ni siquiera se puede capturar). Por eso
+  parecía que la función ya no existía. Ahora el foco se pide con
+  `SetForegroundWindow` sobre el `hwnd` del deck, que hace lo justo y, si
+  Windows lo deniega, simplemente no pasa nada.
+
+### Añadido
+- **Renombrar el escritorio actual con un atajo**: `Ctrl+Alt+R` abre el deck ya
+  con el cursor en la fila correcta y el nombre seleccionado. Escribir y
+  `Enter` — sin abrir el panel y sin un solo clic.
+- **Nombres ya usados como sugerencia.** Se guarda el historial
+  (`~/.atalaya/desknames.json`, los 12 últimos) y, en la caja de renombrado,
+  aparecen como fichas de un clic. `Tab` completa con el primero que encaje,
+  las flechas ↑↓ los recorren. En el panel alimentan el autocompletado nativo
+  del campo. La lista es útil desde el primer uso: si el historial está vacío,
+  se rellena con los nombres que ahora mismo llevan los escritorios.
+- **Reordenar escritorios**, que antes no se podía hacer desde Atalaya:
+  `Ctrl+Alt+Shift+←/→` mueve el escritorio actual de sitio, y cada fila del
+  deck lleva sus flechas `▲ ▼`. En el panel, cada cabecera tiene `◀ ▶`. Mueve
+  el escritorio de verdad, con sus ventanas: Win+Tab y los atajos de Windows
+  lo ven en su nueva posición.
+- **El renombrado está a la vista**: cada fila del deck lleva su lápiz `✎`
+  (antes solo existía el clic derecho, sin ningún indicio), y el clic derecho
+  sobre un botón de escritorio **de la píldora** renombra ese escritorio —
+  los nombres ya están ahí, es el camino más corto.
+- Las tres acciones también en el menú de la píldora, en el de la bandeja y en
+  la vista de ayuda `[?]` del deck; los tres atajos son configurables en
+  Ajustes.
+- Mientras se escribe un nombre, el deck ya no se esconde al alejar el mouse.
+
+### API
+- `POST /api/desktops/move` (`{ desktop, to }` o `{ desktop, delta }`): reordena
+  y reindexa las ventanas ya capturadas, porque al mover uno cambian todos los
+  números de detrás. En el borde no envuelve: simplemente no hace nada.
+- `GET /api/desktops` y el resumen del HUD incluyen `names` / `deskNames`.
+
 ## [0.17.1] - 2026-08-16
 
 ### Corregido

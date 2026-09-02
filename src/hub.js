@@ -22,7 +22,7 @@ import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-const VERSION = "0.17.1";
+const VERSION = "0.18.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -39,6 +39,7 @@ const ICONS_DIR = path.join(STATE_DIR, "icons");
 const CONFIG_FILE = path.join(STATE_DIR, "config.json");
 const PINS_FILE = path.join(STATE_DIR, "pins.json");
 const UPDATE_FILE = path.join(STATE_DIR, "update.json");
+const DESKNAMES_FILE = path.join(STATE_DIR, "desknames.json");
 const HUD_PS1 = path.join(REPO_ROOT, "scripts", "hud.ps1");
 const HOST_EXE = path.join(REPO_ROOT, "bin", "Atalaya.exe");
 const VDESK_EXE = path.join(REPO_ROOT, "tools", "VirtualDesktop.exe");
@@ -361,6 +362,64 @@ function listDesktops() {
       resolve(desks.length ? desks : desktopsCache);
     });
   });
+}
+
+// Nuevo número de un escritorio `d` después de mover el `from` a la posición
+// `to`: el movido aterriza en `to` y los que quedan en medio se corren uno.
+function reindexDesktop(d, from, to) {
+  if (d === from) return to;
+  if (from < to && d > from && d <= to) return d - 1;
+  if (from > to && d >= to && d < from) return d + 1;
+  return d;
+}
+
+// ── Nombres de escritorio recientes ─────────────────────────────────────────
+// Renombrar solo es barato si casi nunca hay que teclear: en la práctica se
+// reciclan los mismos nombres ("dev", "cliente-x", "revisión"). Se guarda el
+// historial —el último usado primero— para ofrecerlo como sugerencia de un
+// clic en el deck y como autocompletado en el panel.
+const MAX_DESK_NAMES = 12;
+// Nombres que Windows pone solo: no son elección de nadie, no se sugieren.
+const AUTO_DESK_NAME = /^(escritorio|desktop)\s*\d+$/i;
+
+function loadDeskNames() {
+  try {
+    const names = JSON.parse(fs.readFileSync(DESKNAMES_FILE, "utf8"));
+    return Array.isArray(names) ? names.filter((n) => typeof n === "string" && n.trim()) : [];
+  } catch {
+    return [];
+  }
+}
+
+function rememberDeskName(name) {
+  const clean = String(name || "").trim();
+  if (!clean || AUTO_DESK_NAME.test(clean)) return;
+  const names = loadDeskNames().filter((n) => n.toLowerCase() !== clean.toLowerCase());
+  names.unshift(clean);
+  try {
+    fs.writeFileSync(DESKNAMES_FILE, JSON.stringify(names.slice(0, MAX_DESK_NAMES), null, 2));
+  } catch {
+    /* el historial es una comodidad: si no se puede escribir, no se rompe nada */
+  }
+}
+
+// Sugerencias = historial primero y, detrás, los nombres que ahora mismo
+// llevan los escritorios. Así la lista es útil desde el primer renombrado,
+// sin necesidad de sembrar el archivo.
+function deskNameSuggestions() {
+  const out = [];
+  const seen = new Set();
+  const add = (n) => {
+    const clean = String(n || "").trim();
+    if (!clean || AUTO_DESK_NAME.test(clean)) return;
+    const key = clean.toLowerCase();
+    if (seen.has(key)) return;
+    seen.add(key);
+    out.push(clean);
+  };
+  for (const n of loadDeskNames()) add(n);
+  for (const d of desktopsCache || []) add(d.name);
+  return out.slice(0, MAX_DESK_NAMES);
 }
 
 let winListCache = null;
@@ -762,6 +821,9 @@ async function buildGlanceSummary() {
   const summary = buildSummary(payload);
   summary.currentDesktop = currentDesktop;
   summary.desktopCount = desks ? desks.length : null;
+  // Sugerencias de nombre: viajan en el resumen que el HUD ya pide cada pocos
+  // segundos, para que el deck pueda ofrecerlas sin una petición extra.
+  summary.deskNames = deskNameSuggestions();
 
   const byDesk = new Map();
   for (const s of payload.sessions) {
@@ -1004,7 +1066,8 @@ const server = http.createServer(async (req, res) => {
 
   if (route === "GET /api/desktops") {
     await refreshCurrentDesktop();
-    return json(res, 200, { desktops: (await listDesktops()) || [], currentDesktop });
+    const desktops = (await listDesktops()) || [];
+    return json(res, 200, { desktops, currentDesktop, names: deskNameSuggestions() });
   }
 
   if (route === "GET /api/desktops/windows") {
@@ -1039,13 +1102,60 @@ const server = http.createServer(async (req, res) => {
           }
         }
         if (changed) saveWindows(map);
+        rememberDeskName(name);
         desktopsCache = null;
         currentDesktopAt = 0;
         winListAt = 0;
         scheduleBroadcast();
-        json(res, 200, { ok: true });
+        json(res, 200, { ok: true, names: deskNameSuggestions() });
       }
     );
+    return;
+  }
+
+  // Reordenar escritorios. `to` es la posición destino; `delta` (-1/+1) la
+  // forma cómoda de "muévelo uno a la izquierda/derecha" sin saber el índice.
+  if (route === "POST /api/desktops/move") {
+    const body = await readBody(req);
+    const from = Number(body.desktop);
+    const desks = (await listDesktops()) || [];
+    if (!Number.isInteger(from) || from < 0) return json(res, 400, { error: "desktop inválido" });
+    if (!fs.existsSync(VDESK_EXE)) {
+      return json(res, 409, { error: "falta tools\\VirtualDesktop.exe (tools\\get-virtualdesktop.ps1)" });
+    }
+    if (!desks.length) return json(res, 409, { error: "no pude listar los escritorios" });
+    const to = body.to !== undefined ? Number(body.to) : from + Number(body.delta || 0);
+    if (!Number.isInteger(to)) return json(res, 400, { error: "destino inválido" });
+    // Sin envolver: en el borde el gesto simplemente no hace nada (mover el
+    // primero al final sería una sorpresa poco reversible de un solo clic).
+    if (to < 0 || to >= desks.length || to === from || from >= desks.length) {
+      return json(res, 200, { ok: true, moved: false });
+    }
+    execVdesk([`/GetDesktop:${from}`, `/MoveDesktop:${to}`], { timeout: 5000 }, (err, out) => {
+      if (!/Moving virtual desktop/i.test(String(out || ""))) {
+        return json(res, 502, { error: "no se pudo mover el escritorio" });
+      }
+      // Al reordenar cambian TODOS los números afectados: las ventanas ya
+      // capturadas se reindexan a mano para no quedar apuntando al vecino.
+      const map = loadWindows();
+      let changed = false;
+      for (const w of Object.values(map)) {
+        const d = w.desktop;
+        if (typeof d !== "number") continue;
+        const moved = reindexDesktop(d, from, to);
+        if (moved !== d) {
+          w.desktop = moved;
+          changed = true;
+        }
+      }
+      if (changed) saveWindows(map);
+      desktopsCache = null;
+      desktopsAt = 0;
+      currentDesktopAt = 0;
+      winListAt = 0;
+      scheduleBroadcast();
+      json(res, 200, { ok: true, moved: true, from, to });
+    });
     return;
   }
 

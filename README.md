@@ -101,7 +101,9 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     alertas vistas) sin nada flotando en pantalla: se maneja desde la bandeja.
     La preferencia se recuerda entre reinicios.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
-  clic y estás ahí. El actual se marca con ◉ (y fondo resaltado); el que pide
+  clic y estás ahí; **clic derecho = renombrar ese escritorio** (el nombre ya
+  está a la vista ahí, es el camino más corto). El actual se marca con ◉ (y
+  fondo resaltado); el que pide
   atención va en ámbar con 🔔; el que tiene **trabajo en progreso** muestra ⚙
   en azul (así recuerdas qué escritorio tiene agentes trabajando).
   Opcionalmente puede mostrar también las
@@ -141,8 +143,20 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   La preferencia `Apertura del deck` (Ajustes) permite volver al modo hover:
   inmediato o con retardo intencional de ~0,6 s (los roces accidentales no lo
   levantan).
-  - **Clic** en una fila = ir a ese escritorio · **clic derecho** = renombrarlo
-    (cambia el nombre real del escritorio de Windows).
+  - **Clic** en una fila = ir a ese escritorio.
+  - **✎ de la fila** (o clic derecho en ella) = **renombrar** ese escritorio,
+    ahí mismo: cambia el nombre real del escritorio de Windows. Mientras
+    escribes, el deck no se esconde aunque alejes el mouse.
+    - La caja llega con los **nombres que ya has usado** como fichas de un
+      clic. `Tab` completa con el primero que encaje con lo tecleado (o con el
+      primero de la lista si aún no has escrito nada), `↑ ↓` los recorren,
+      `Enter` guarda, `Esc` cancela. Reciclar un nombre anterior cuesta dos
+      teclas, que es justo lo que evita acabar con nombres repetidos por
+      pereza.
+  - **▲ ▼ de la fila** = **reordenar**: mueve ese escritorio un puesto arriba
+    o abajo. Se mueve el escritorio de verdad, con sus ventanas — Win+Tab y
+    los atajos de Windows lo ven en su nueva posición. En los extremos la
+    flecha se apaga (no envuelve).
   - **◀ ▶** = escritorio anterior/siguiente (con vuelta) · **+** = crear
     escritorio nuevo e ir a él.
   - **[esc] / [★] / [?]**: alterna entre la vista por escritorios, la de
@@ -163,7 +177,10 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     que cambia a ese escritorio; tu escritorio actual se marca con `◉ aquí`.
   - **✏ en la cabecera**: renombra el escritorio — cambia el nombre **real**
     del escritorio de Windows (visible también en Win+Tab y en el HUD). Úsalo
-    como etiqueta de contexto: "API clientes", "Lectura", etc.
+    como etiqueta de contexto: "API clientes", "Lectura", etc. El campo
+    autocompleta con los nombres que ya has usado.
+  - **◀ ▶ en la cabecera**: mueven ese escritorio de posición (mismo efecto
+    que las flechas del deck).
   - **↗ Ir** (o **doble clic** en la tarjeta): salta a esa sesión.
   - **✏** junto al nombre de la tarjeta: etiqueta personalizada del clone
     ("qué estamos haciendo aquí"). Persiste por carpeta entre sesiones; vacío
@@ -190,6 +207,9 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+J` | Saltar a la sesión más urgente (la que lleva más tiempo esperándote) |
   | `Ctrl+Alt+Right` | Escritorio siguiente (con vuelta al llegar al final) |
   | `Ctrl+Alt+Left` | Escritorio anterior (con vuelta) |
+  | `Ctrl+Alt+R` | **Renombrar el escritorio actual**: abre el deck con el cursor ya en su fila y el nombre seleccionado — escribe y `Enter` (o `Tab` para reciclar un nombre anterior) |
+  | `Ctrl+Alt+Shift+Left` | Mover el escritorio actual una posición a la izquierda |
+  | `Ctrl+Alt+Shift+Right` | Mover el escritorio actual una posición a la derecha |
   | `Ctrl+Alt+S` | Fijar/quitar como favorita (★) la sesión de la ventana activa |
   | `Ctrl+Alt+U` | Apartar la ventana activa para que no solape la píldora |
   | `Ctrl+Alt+P` | Pomodoro: iniciar/pausar (lo activa si estaba oculto) |
@@ -487,7 +507,9 @@ etiqueta informativa heredada (opcional).
 - Estado central: `%USERPROFILE%\.atalaya\` (`sessions/`, `notes.json`,
   `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
   escritorio de cada sesión, `config.json` con los hotkeys y las preferencias
-  — secciones `hotkeys`, `pill`, `deck`, `pomodoro`, `update` —, `update.json`
+  — secciones `hotkeys`, `pill`, `deck`, `pomodoro`, `update` —,
+  `desknames.json` con los últimos nombres de escritorio que has usado (los
+  que se ofrecen al renombrar), `update.json`
   con el resultado de la última consulta de versión, `hub.log`,
   `hook-errors.log`, `hud.json` con la posición del HUD y si la píldora está
   oculta).
