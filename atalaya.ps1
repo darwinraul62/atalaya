@@ -968,7 +968,8 @@ if (-not (Test-Path $cfgFile)) {
     $defaultCfg = '{ "hotkeys": { "togglePanel": "Ctrl+Alt+A", "jumpUrgent": "Ctrl+Alt+J", ' +
         '"nextDesktop": "Ctrl+Alt+Right", "prevDesktop": "Ctrl+Alt+Left", ' +
         '"newDesktop": "none", "toggleDeck": "none", "pinSession": "Ctrl+Alt+S", ' +
-        '"clearWindow": "Ctrl+Alt+U", "pomodoro": "Ctrl+Alt+P", "recenterPill": "Ctrl+Alt+H" }, ' +
+        '"clearWindow": "Ctrl+Alt+U", "pomodoro": "Ctrl+Alt+P", "recenterPill": "Ctrl+Alt+H", ' +
+        '"togglePill": "Ctrl+Alt+O", "compactPill": "Ctrl+Alt+K" }, ' +
         '"pill": { "corner": "", "maxPins": 0, "dim": "idle", "layout": "h", "taskbar": false }, ' +
         '"deck": { "open": "click" }, ' +
         '"pomodoro": { "enabled": false, "workMin": 25, "breakMin": 5 }, ' +
@@ -997,6 +998,10 @@ if (Test-Hub) {
 $hudPid = Get-PidAlive (Join-Path $StateDir "hud.pid") $HudProcNames
 if ($hudPid) {
     Write-Host "HUD: ya activo (pid $hudPid)"
+    # Quien abre Atalaya (menu Inicio, buscador) con el HUD ya corriendo casi
+    # siempre esta buscando la pildora: el HUD ve este archivo en su siguiente
+    # tick y la devuelve a la vista aunque estuviera oculta.
+    try { Set-Content -Path (Join-Path $StateDir "hud.show") -Value "$PID" } catch { }
 } else {
     Write-Host "Arrancando HUD..."
     if (Test-Path $HostExe) {

@@ -97,9 +97,18 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     importantes con su atajo escrito al lado: recentrar la píldora,
     mostrarla/ocultarla, abrir el panel, ir a la sesión que te necesita,
     deck, pomodoro, apartar ventana, Ajustes, reiniciar y salir.
-  - **Ocultar la píldora** deja Atalaya funcionando entero (atajos, toasts,
-    alertas vistas) sin nada flotando en pantalla: se maneja desde la bandeja.
-    La preferencia se recuerda entre reinicios.
+  - **Ocultar la píldora** (`Ctrl+Alt+O`) deja Atalaya funcionando entero
+    (atajos, toasts, alertas vistas) sin nada flotando en pantalla: se maneja
+    desde la bandeja. La preferencia se recuerda entre reinicios. **Ocultar 15
+    minutos** la quita solo un rato y vuelve sola.
+  - **Píldora compacta** (`Ctrl+Alt+K`, o clic derecho → *Píldora compacta*):
+    se queda en los contadores que no están en cero, en pequeño, sin botones
+    de escritorio. Todo lo demás sigue en el deck, el menú y los atajos.
+  - **Abrir Atalaya desde el menú Inicio** con Atalaya ya en marcha trae la
+    píldora de vuelta, aunque estuviera oculta.
+  - La primera vez, Atalaya deja su icono **a la vista en la barra de tareas**
+    (Windows 11 lo mandaría al desbordamiento **^**). Si luego lo mueves tú,
+    se respeta tu decisión.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
   clic y estás ahí; **clic derecho = renombrar ese escritorio** (el nombre ya
   está a la vista ahí, es el camino más corto). El actual se marca con ◉ (y
@@ -214,6 +223,8 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+U` | Apartar la ventana activa para que no solape la píldora |
   | `Ctrl+Alt+P` | Pomodoro: iniciar/pausar (lo activa si estaba oculto) |
   | `Ctrl+Alt+H` | Recentrar la píldora (si quedó fuera de vista o tras un cambio de monitor/resolución: va a su esquina fija, o abajo al centro) |
+  | `Ctrl+Alt+O` | Ocultar/mostrar la píldora (Atalaya sigue en la bandeja) |
+  | `Ctrl+Alt+K` | Píldora compacta (solo contadores) / tamaño normal |
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Mostrar/ocultar el deck |
 
@@ -436,8 +447,9 @@ que no se cuele estado del usuario ni historia de git, que vayan las tres
 variantes y que `hooks/install-wsl.sh` conserve finales de línea LF (con CRLF,
 bash dentro de WSL falla).
 
-> **Windows 11 esconde los iconos nuevos de la bandeja.** Si no ves el de
-> Atalaya, despliega la flecha **^** de la barra de tareas y **arrástralo**
+> **Windows 11 esconde los iconos nuevos de la bandeja.** Atalaya pide
+> quedar a la vista la primera vez que arranca; si aun así no ves el icono,
+> despliega la flecha **^** de la barra de tareas y **arrástralo**
 > fuera, o ve a *Configuración → Personalización → Barra de tareas → Otros
 > iconos de la bandeja del sistema* y activa **Atalaya**.
 

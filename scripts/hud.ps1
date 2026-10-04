@@ -168,6 +168,8 @@ $Hotkeys = @{
     clearWindow = "Ctrl+Alt+U"
     pomodoro    = "Ctrl+Alt+P"
     recenterPill = "Ctrl+Alt+H"
+    togglePill  = "Ctrl+Alt+O"
+    compactPill = "Ctrl+Alt+K"
 }
 $PillCorner = ""
 $MaxPins = 0
@@ -224,6 +226,9 @@ function ConvertTo-Hotkey([string]$spec) {
 
 New-Item -ItemType Directory -Force -Path $StateDir | Out-Null
 $HudPidFile = Join-Path $StateDir "hud.pid"
+# Lo deja atalaya.ps1 cuando lo abren con el HUD ya vivo: "traeme la pildora".
+$HudShowFile = Join-Path $StateDir "hud.show"
+Remove-Item $HudShowFile -Force -ErrorAction SilentlyContinue   # restos de otra sesion
 Set-Content -Path $HudPidFile -Value $PID
 
 # Windows RECICLA los identificadores de proceso: un .pid que sobrevivio a su
@@ -436,18 +441,25 @@ $script:DeckView = "desks"   # "desks" (por escritorio) o "pins" (importantes)
 # flotando en pantalla. Solo tiene sentido porque el icono de la bandeja queda
 # como puerta de entrada permanente.
 $script:PillHidden = $false
+# Ocultado temporal ("Ocultar 15 minutos"): no se guarda en hud.json, para que
+# un reinicio a mitad de la pausa no la deje oculta para siempre.
+$script:PillHideTemp = $false
+# Compacta: solo los contadores, en pequenio, sin botones de escritorio.
+$script:PillCompact = $false
 try {
     $prefs = Get-Content $PosFile -Raw | ConvertFrom-Json
     if ($prefs.deckPinned) { $script:DeckPinned = $true }
     if ($prefs.deckView -eq "pins") { $script:DeckView = "pins" }
     if ($prefs.pillHidden) { $script:PillHidden = $true }
+    if ($prefs.pillCompact) { $script:PillCompact = $true }
 } catch { }
 
 function Save-Position {
     try {
         @{ left = $window.Left; top = $window.Top
            deckPinned = $script:DeckPinned; deckView = $script:DeckView
-           pillHidden = $script:PillHidden } |
+           pillHidden = ($script:PillHidden -and -not $script:PillHideTemp)
+           pillCompact = $script:PillCompact } |
             ConvertTo-Json | Set-Content -Path $PosFile
     } catch { }
 }
@@ -603,12 +615,28 @@ function Update-Hud {
     $txtAttn.Opacity  = if ($s.needs_you -gt 0) { 1.0 } else { 0.45 }
     $txtWork.Opacity  = if ($s.working -gt 0)   { 1.0 } else { 0.45 }
     $txtReady.Opacity = if ($s.ready -gt 0)     { 1.0 } else { 0.45 }
+    if ($script:PillCompact) {
+        # Solo lo que tiene algo; sin nada, un unico contador en cero para que
+        # la pildora no desaparezca del todo.
+        $txtAttn.Visibility  = if ($s.needs_you -gt 0) { "Visible" } else { "Collapsed" }
+        $txtWork.Visibility  = if ($s.working -gt 0)   { "Visible" } else { "Collapsed" }
+        $txtReady.Visibility = if ($s.ready -gt 0 -or ($s.needs_you -eq 0 -and $s.working -eq 0)) { "Visible" } else { "Collapsed" }
+        $first = $true
+        foreach ($tb in @($txtAttn, $txtWork, $txtReady)) {
+            if ($tb.Visibility -ne "Visible") { continue }
+            $tb.Margin = if ($first) { "0,0,0,0" } else { "6,0,0,0" }
+            $first = $false
+        }
+    } else {
+        foreach ($tb in @($txtAttn, $txtWork, $txtReady)) { $tb.Visibility = "Visible" }
+        if (-not $Vertical) { $txtAttn.Margin = "0,0,0,0" }
+    }
 
     # Botones por escritorio en la pastilla: numero y nombre en TODOS (mas
     # facil orientarse); el actual se marca con el circulo relleno + fondo, y
     # el que pide atencion en ambar con campana (glifo ademas de color).
     $deskBtns.Children.Clear()
-    if ($s.deck) {
+    if ($s.deck -and -not $script:PillCompact) {
         foreach ($d in $s.deck) {
             if ($null -eq $d.num) { continue }
             $isCur = [bool]$d.current
@@ -663,7 +691,7 @@ function Update-Hud {
     # Ocultas por defecto en la pastilla (pill.maxPins, defecto 0: viven en la
     # vista [estrella] del deck); si se activan, priorizan las urgentes.
     $pinBtns.Children.Clear()
-    if ($s.pinned -and $MaxPins -gt 0) {
+    if ($s.pinned -and $MaxPins -gt 0 -and -not $script:PillCompact) {
         $pinList = @($s.pinned | Sort-Object { if ($_.status -eq "needs_you") { 0 } else { 1 } })
         if ($pinList.Count -gt $MaxPins) { $pinList = $pinList[0..($MaxPins - 1)] }
         foreach ($p in $pinList) {
@@ -706,7 +734,9 @@ function Update-Hud {
     }
     Set-PillOpacity
 
-    $window.ToolTip = if ($s.urgent) { "Atiende: $($s.urgent)" } else { $null }
+    $window.ToolTip = if ($s.urgent) { "Atiende: $($s.urgent)" }
+        elseif ($script:PillCompact) { "Atalaya (compacta): doble clic abre el panel - clic derecho para volver al tamano normal ($($Hotkeys.compactPill))" }
+        else { $null }
     $script:LastSummary = $s
     Update-TrayStatus $s
     Update-Deck $s
@@ -1115,7 +1145,9 @@ function Update-Deck($s) {
             @{ K = $Hotkeys.pinSession;  D = "Favorito: fijar/quitar la ventana activa" },
             @{ K = $Hotkeys.clearWindow; D = "Apartar la ventana activa de la pildora" },
             @{ K = $Hotkeys.pomodoro;    D = "Pomodoro: iniciar o pausar" },
-            @{ K = $Hotkeys.recenterPill; D = "Recentrar la pildora (si quedo fuera de vista)" }
+            @{ K = $Hotkeys.recenterPill; D = "Recentrar la pildora (si quedo fuera de vista)" },
+            @{ K = $Hotkeys.togglePill;   D = "Ocultar/mostrar la pildora (sigue en la bandeja)" },
+            @{ K = $Hotkeys.compactPill;  D = "Pildora compacta (solo contadores) / normal" }
         )
         foreach ($hk in $helpKeys) {
             if (-not $hk.K -or $hk.K.Trim().ToLower() -eq "none") { continue }
@@ -1529,6 +1561,8 @@ function Assert-Topmost {
 # vigilancia siguen corriendo; la app se maneja desde la bandeja.
 function Show-Pill {
     $script:PillHidden = $false
+    $script:PillHideTemp = $false
+    $script:UnhideTimer.Stop()
     try { $window.Show(); $window.Opacity = 1.0 } catch { }
     if ($script:PillHwnd) { [AtalayaHotkey]::AssertTopmost($script:PillHwnd) }
     Update-TrayMenuState
@@ -1537,6 +1571,8 @@ function Show-Pill {
 
 function Hide-Pill {
     $script:PillHidden = $true
+    $script:PillHideTemp = $false
+    $script:UnhideTimer.Stop()
     Hide-Deck
     try { $window.Hide() } catch { }
     Update-TrayMenuState
@@ -1545,6 +1581,91 @@ function Hide-Pill {
 
 function Toggle-Pill {
     if ($script:PillHidden) { Show-Pill } else { Hide-Pill }
+}
+
+# Ocultar por un rato: vuelve sola al vencer. Pensado para cuando estorba
+# encima de algo concreto (una demo, un video, un formulario).
+$script:UnhideTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:UnhideTimer.Add_Tick({
+    $script:UnhideTimer.Stop()
+    if ($script:PillHidden) { Show-Pill }
+})
+function Hide-PillFor([int]$minutes) {
+    Hide-Pill
+    $script:PillHideTemp = $true
+    Save-Position
+    $script:UnhideTimer.Interval = [TimeSpan]::FromMinutes($minutes)
+    $script:UnhideTimer.Start()
+    Update-TrayMenuState
+}
+
+# Modo compacto: la pildora queda reducida a los contadores (solo los que no
+# estan en cero) en letra pequenia. Todo lo demas sigue en el deck, el menu,
+# la bandeja y los atajos. Se recuerda en hud.json.
+function Set-PillCompact([bool]$on) {
+    $script:PillCompact = $on
+    Apply-PillCompact
+    Update-Hud
+    Update-TrayMenuState
+    Save-Position
+}
+function Toggle-PillCompact { Set-PillCompact (-not $script:PillCompact) }
+
+function Apply-PillCompact {
+    $c = [bool]$script:PillCompact
+    $hide = if ($c) { "Collapsed" } else { "Visible" }
+    $deskBtns.Visibility = $hide
+    $pinBtns.Visibility = $hide
+    $btnDeck.Visibility = $hide
+    $btnPanel.Visibility = $hide
+    $size = if ($c) { 11.0 } else { 13.0 }
+    foreach ($tb in @($txtAttn, $txtWork, $txtReady)) { $tb.FontSize = $size }
+    $txtPomo.FontSize = if ($c) { 10.5 } else { 12.5 }
+    if ($Vertical -and -not $c) {
+        $pill.Padding = "12,9"; $pill.CornerRadius = 13
+        $root.Orientation = "Vertical"
+        foreach ($tb in @($txtWork, $txtReady, $txtPomo)) { $tb.Margin = "0,5,0,0" }
+    } else {
+        # Compacta siempre en una linea, aunque el diseno normal sea columna
+        $root.Orientation = "Horizontal"
+        if ($c) {
+            $pill.Padding = "8,2"; $pill.CornerRadius = 11
+            foreach ($tb in @($txtWork, $txtReady, $txtPomo)) { $tb.Margin = "6,0,0,0" }
+        } else {
+            $pill.Padding = "13,7"; $pill.CornerRadius = 17
+            foreach ($tb in @($txtWork, $txtReady)) { $tb.Margin = "11,0,0,0" }
+            $txtPomo.Margin = "12,0,0,0"
+        }
+    }
+    try { $miCompact.IsChecked = $c } catch { }
+}
+
+# Windows 11 manda los iconos nuevos de la bandeja al desbordamiento (la
+# flecha junto al reloj), justo donde nadie los busca. Si el usuario nunca
+# decidio nada sobre el de Atalaya (no existe IsPromoted), lo dejamos a la
+# vista en la barra de tareas; si ya lo movio el, se respeta su eleccion.
+# Explorer crea la entrada al registrar el icono, por eso se reintenta unos
+# ticks.
+$script:TrayPromoteTries = 0
+function Promote-TrayIcon {
+    if ($script:TrayPromoteTries -ge 5) { return }
+    $script:TrayPromoteTries++
+    try {
+        $exe = [System.Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
+        if ([System.IO.Path]::GetFileName($exe) -ne "Atalaya.exe") { $script:TrayPromoteTries = 5; return }
+        $base = "HKCU:\Control Panel\NotifyIconSettings"
+        if (-not (Test-Path $base)) { $script:TrayPromoteTries = 5; return }
+        foreach ($k in Get-ChildItem $base) {
+            $p = Get-ItemProperty $k.PSPath
+            if ([string]$p.ExecutablePath -ne $exe) { continue }
+            if ($null -eq $p.IsPromoted) {
+                New-ItemProperty -Path $k.PSPath -Name IsPromoted -PropertyType DWord -Value 1 -Force | Out-Null
+                Write-HudLog "bandeja: icono puesto a la vista en la barra de tareas"
+            }
+            $script:TrayPromoteTries = 5
+            return
+        }
+    } catch { $script:TrayPromoteTries = 5 }
 }
 
 # Rescate desde la bandeja (clic simple). Conserva la posicion elegida por el
@@ -1569,6 +1690,7 @@ function Update-TrayMenuState {
         if ($script:TrayPillToggle) {
             $script:TrayPillToggle.Text = if ($script:PillHidden) { "Mostrar la pildora" } else { "Ocultar la pildora" }
         }
+        if ($script:TrayCompact) { $script:TrayCompact.Checked = [bool]$script:PillCompact }
     } catch { }
 }
 
@@ -1733,8 +1855,15 @@ $miHome = New-Object System.Windows.Controls.MenuItem
 $miHome.Header = "Recentrar la pildora"; $miHome.InputGestureText = $Hotkeys.recenterPill
 $miHome.Add_Click({ Move-PillHome })
 $miHide = New-Object System.Windows.Controls.MenuItem
-$miHide.Header = "Ocultar la pildora (queda en la bandeja)"
+$miHide.Header = "Ocultar la pildora (queda en la bandeja)"; $miHide.InputGestureText = $Hotkeys.togglePill
 $miHide.Add_Click({ Hide-Pill })
+$miHide15 = New-Object System.Windows.Controls.MenuItem
+$miHide15.Header = "Ocultar 15 minutos"
+$miHide15.Add_Click({ Hide-PillFor 15 })
+$miCompact = New-Object System.Windows.Controls.MenuItem
+$miCompact.Header = "Pildora compacta"; $miCompact.InputGestureText = $Hotkeys.compactPill
+$miCompact.IsCheckable = $true
+$miCompact.Add_Click({ Set-PillCompact ([bool]$miCompact.IsChecked) })
 $miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
 $miPin.Add_Click({ Pin-ToAllDesktops })
 $miExit = New-Object System.Windows.Controls.MenuItem; $miExit.Header = "Salir del HUD"
@@ -1750,7 +1879,9 @@ $miExit.Add_Click({ $window.Close() })
 [void]$menu.Items.Add($miClear)
 [void]$menu.Items.Add($miPomo)
 [void]$menu.Items.Add($miHome)
+[void]$menu.Items.Add($miCompact)
 [void]$menu.Items.Add($miHide)
+[void]$menu.Items.Add($miHide15)
 [void]$menu.Items.Add($miPin)
 [void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
 [void]$menu.Items.Add($miExit)
@@ -1804,7 +1935,9 @@ Add-TraySep
 # busca este menu.
 $miTrayHome = Add-TrayItem "Recentrar la pildora" $Hotkeys.recenterPill { Move-PillHome }
 try { $miTrayHome.Font = New-Object System.Drawing.Font($trayMenu.Font, [System.Drawing.FontStyle]::Bold) } catch { }
-$script:TrayPillToggle = Add-TrayItem "Ocultar la pildora" "" { Toggle-Pill }
+$script:TrayPillToggle = Add-TrayItem "Ocultar la pildora" $Hotkeys.togglePill { Toggle-Pill }
+$null = Add-TrayItem "Ocultar la pildora 15 minutos" "" { Hide-PillFor 15 }
+$script:TrayCompact = Add-TrayItem "Pildora compacta" $Hotkeys.compactPill { Toggle-PillCompact }
 $null = Add-TrayItem "Anclar a todos los escritorios" "" { Pin-ToAllDesktops }
 Add-TraySep
 $null = Add-TrayItem "Ir a la sesion que te necesita" $Hotkeys.jumpUrgent { Jump-Urgent }
@@ -1858,6 +1991,8 @@ $HotkeyHook = {
             11 { Rename-CurrentDesktop }
             12 { Move-CurrentDesktop -1 }
             13 { Move-CurrentDesktop 1 }
+            14 { Toggle-Pill }
+            15 { Toggle-PillCompact }
         }
         $handled.Value = $true
     }
@@ -1882,7 +2017,9 @@ function Register-Hotkeys {
             @{ Id = 10; Spec = $Hotkeys.recenterPill; Name = "recentrar la pildora" },
             @{ Id = 11; Spec = $Hotkeys.renameDesktop; Name = "renombrar el escritorio actual" },
             @{ Id = 12; Spec = $Hotkeys.moveDeskPrev; Name = "mover el escritorio a la izquierda" },
-            @{ Id = 13; Spec = $Hotkeys.moveDeskNext; Name = "mover el escritorio a la derecha" }
+            @{ Id = 13; Spec = $Hotkeys.moveDeskNext; Name = "mover el escritorio a la derecha" },
+            @{ Id = 14; Spec = $Hotkeys.togglePill;   Name = "ocultar/mostrar la pildora" },
+            @{ Id = 15; Spec = $Hotkeys.compactPill;  Name = "pildora compacta/normal" }
         )
         foreach ($hk in $wanted) {
             $parsed = ConvertTo-Hotkey $hk.Spec
@@ -1904,12 +2041,18 @@ function Register-Hotkeys {
 $timer = New-Object System.Windows.Threading.DispatcherTimer
 $timer.Interval = [TimeSpan]::FromSeconds(3)
 $timer.Add_Tick({
+    Promote-TrayIcon
+    if (Test-Path $HudShowFile) {
+        Remove-Item $HudShowFile -Force -ErrorAction SilentlyContinue
+        Rescue-Pill
+    }
     Update-Hud
     Watch-Foreground
     Assert-Topmost
 })
 
 $window.Add_ContentRendered({
+    Apply-PillCompact
     try {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
         $script:PillHwnd = $helper.Handle.ToInt64()
@@ -1952,7 +2095,7 @@ $window.Add_Closed({
     Save-Position
     try {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($window)
-        foreach ($hkId in 1..10) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
+        foreach ($hkId in 1..15) { [void][AtalayaHotkey]::UnregisterHotKey($helper.Handle, $hkId) }
     } catch { }
     # Solo se borra el hud.pid si SIGUE siendo nuestro: si entretanto arranco
     # otro HUD, el archivo ya lleva su numero y borrarlo lo dejaria invisible.
@@ -1961,7 +2104,17 @@ $window.Add_Closed({
             Remove-Item $HudPidFile -Force
         }
     } catch { }
+    # Fin del bucle de mensajes (ver Dispatcher.Run al final del archivo)
+    [System.Windows.Threading.Dispatcher]::CurrentDispatcher.InvokeShutdown()
 })
 
 Write-HudLog "HUD iniciado (pid=$PID)"
-[void]$window.ShowDialog()
+# Bucle de mensajes PROPIO, no ShowDialog(): ocultar una ventana abierta con
+# ShowDialog TERMINA el dialogo, ShowDialog retorna, el script llega al final
+# y el proceso sale con codigo 0 sin dejar rastro. Asi "Ocultar la pildora"
+# cerraba Atalaya entero (bandeja incluida), y como pillHidden queda guardado
+# en hud.json, cada arranque posterior moria a los pocos segundos.
+# Con Dispatcher.Run el bucle vive hasta que Closed llama a InvokeShutdown.
+if ($script:PillHidden) { $window.Opacity = 0 }   # sin destello al arrancar oculta
+$window.Show()
+[System.Windows.Threading.Dispatcher]::Run()

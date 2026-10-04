@@ -248,6 +248,8 @@
       <label>Apartar ventana de la píldora <input data-hk="clearWindow" placeholder="Ctrl+Alt+U"></label>
       <label>Pomodoro: iniciar/pausar <input data-hk="pomodoro" placeholder="Ctrl+Alt+P"></label>
       <label>Recentrar la píldora <input data-hk="recenterPill" placeholder="Ctrl+Alt+H"></label>
+      <label>Ocultar/mostrar la píldora <input data-hk="togglePill" placeholder="Ctrl+Alt+O"></label>
+      <label>Píldora compacta/normal <input data-hk="compactPill" placeholder="Ctrl+Alt+K"></label>
       <label>Esquina de la píldora
         <select id="setCorner">
           <option value="">libre (recordar arrastre)</option>
@@ -321,7 +323,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.17.1";
+const UI_VERSION = "0.19.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },

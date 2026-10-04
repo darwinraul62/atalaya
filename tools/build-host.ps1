@@ -57,7 +57,15 @@ if (-not $csc) {
 # --- Referencia a PowerShell --------------------------------------------------
 # System.Management.Automation.dll vive en el GAC; su ruta exacta cambia entre
 # equipos, asi que se la preguntamos al propio PowerShell en ejecucion.
+# OJO: solo vale si quien ejecuta es Windows PowerShell 5.1. Desde PowerShell 7
+# esa ruta es la de .NET moderno (System.Runtime 10.x) y csc de .NET Framework
+# no puede compilar contra ella; en ese caso se busca la del GAC.
 $smaPath = [psobject].Assembly.Location
+if ($PSVersionTable.PSEdition -eq "Core") {
+    $smaPath = Get-ChildItem "$env:WINDIR\Microsoft.NET\assembly\GAC_MSIL\System.Management.Automation" `
+        -Recurse -Filter "System.Management.Automation.dll" -ErrorAction SilentlyContinue |
+        Select-Object -First 1 -ExpandProperty FullName
+}
 if (-not $smaPath -or -not (Test-Path $smaPath)) {
     Write-Host "[x] No pude localizar System.Management.Automation.dll"
     exit 1

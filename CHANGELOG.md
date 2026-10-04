@@ -4,6 +4,44 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.19.0] - 2026-10-04
+
+La píldora se puede quitar de en medio sin perderla: ocultarla ya no cierra
+Atalaya, se puede encoger a sus contadores y siempre hay un camino de vuelta.
+
+### Corregido
+- **Ocultar la píldora cerraba Atalaya entero, y desde entonces ya no
+  arrancaba.** El HUD mantenía vivo su bucle de mensajes con
+  `ShowDialog()`, y en WPF ocultar una ventana abierta así **termina el
+  diálogo**: `ShowDialog` retornaba, el script llegaba al final y el proceso
+  salía con código 0, sin excepción ni línea en el log (el icono de la bandeja
+  moría con él). Como `pillHidden` queda guardado en `hud.json`, cada arranque
+  posterior repetía la secuencia — arrancar, ocultarse, morir — en un par de
+  segundos. Ahora el bucle es `Dispatcher.Run()` y solo lo termina el cierre
+  real de la ventana.
+- **El panel decía 0.17.1 con el hub en 0.18.0**, así que creía que había
+  versión nueva y se recargaba solo al abrirse. `check-package.ps1` comprueba
+  ahora que `package.json`, `src/hub.js` y `ui/index.html` lleven la misma
+  versión.
+- **`tools/build-host.ps1` fallaba lanzado desde PowerShell 7**: tomaba la
+  `System.Management.Automation.dll` de .NET moderno, contra la que el `csc`
+  de .NET Framework no puede compilar. Desde PowerShell 7 usa la del GAC.
+
+### Añadido
+- **Píldora compacta** (`Ctrl+Alt+K`, configurable `compactPill`; también en
+  el menú de la píldora y en la bandeja): solo los contadores que no están en
+  cero, en letra pequeña y siempre en una línea. Se recuerda entre reinicios.
+- **Ocultar/mostrar la píldora con un atajo** (`Ctrl+Alt+O`, configurable
+  `togglePill`) y **Ocultar 15 minutos**, que vuelve sola y no se guarda (un
+  reinicio a mitad de la pausa no la deja oculta para siempre).
+- **Abrir Atalaya con Atalaya ya en marcha** (menú Inicio, buscador) devuelve
+  la píldora a la vista aunque estuviera oculta.
+- **Icono de la bandeja a la vista**: Windows 11 manda los iconos nuevos al
+  desbordamiento (**^**). Si el usuario nunca decidió nada sobre el de
+  Atalaya, el HUD lo promueve a la barra de tareas
+  (`HKCU\Control Panel\NotifyIconSettings\…\IsPromoted`); si ya lo movió,
+  se respeta.
+
 ## [0.18.0] - 2026-09-01
 
 Renombrar y reordenar escritorios deja de costar un viaje al panel: se hace

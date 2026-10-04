@@ -130,6 +130,20 @@ try {
         } else {
             Write-Host "[+] Sintaxis correcta en todos los .ps1 y .js/.mjs del paquete"
         }
+
+        # --- La version vive en TRES sitios -------------------------------------
+        # Si el panel (UI_VERSION) no coincide con el hub (VERSION), el panel
+        # cree que hay version nueva y se recarga solo cada vez que se abre.
+        # Paso en la 0.18.0: hub y package.json en 0.18.0, panel en 0.17.1.
+        $pkgVer = (Get-Content (Join-Path $work "Atalaya/package.json") -Raw | ConvertFrom-Json).version
+        $hubVer = ([regex]::Match((Get-Content (Join-Path $work "Atalaya/src/hub.js") -Raw), 'const VERSION = "([^"]+)"')).Groups[1].Value
+        $uiVer = ([regex]::Match((Get-Content (Join-Path $work "Atalaya/ui/index.html") -Raw), 'const UI_VERSION = "([^"]+)"')).Groups[1].Value
+        if ($pkgVer -ne $hubVer -or $pkgVer -ne $uiVer) {
+            Write-Host "[x] Versiones desalineadas: package.json=$pkgVer hub.js=$hubVer ui/index.html=$uiVer"
+            $ok = $false
+        } else {
+            Write-Host "[+] Version $pkgVer igual en package.json, hub.js y el panel"
+        }
     } finally {
         Remove-Item $work -Recurse -Force -ErrorAction SilentlyContinue
     }
