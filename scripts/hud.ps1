@@ -11,6 +11,8 @@
 #   ancla permanente de la app, y desde ahi se recupera la pildora si se pierde
 # - Opcional (pill.taskbar): escritorios en la barra de tareas, como
 #   alternativa a la pildora flotante
+# - Opcional (bar.dock/bar.monitor): barra acoplada a un borde (AppBar) en
+#   uno o en todos los monitores, otra alternativa que reserva su franja
 # Ejecutar con bin\Atalaya.exe --hud (o powershell.exe, que tambien es STA).
 # Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin
 # BOM.
@@ -200,6 +202,8 @@ $PillTaskbar = $false # escritorios en la barra de tareas (boton propio de
                       # Atalaya con miniatura y botones por escritorio). Antes
                       # ponia la PILDORA en la barra; ese uso desaparecio.
 $DeckOpen = "click"   # "click": boton/hotkey; "delay": hover ~600ms; "hover": hover inmediato
+$DockCfg = ""         # barra acoplada: "" apagada, "top", "bottom", "left", "right"
+$DockMonCfg = "primary" # en que monitor: "primary", "all" o "1".."9" (de izquierda a derecha)
 $PomoCfgEnabled = $false
 $PomoCfgWork = 25
 $PomoCfgBreak = 5
@@ -214,6 +218,8 @@ try {
     if ($cfg.pill.layout -eq "v") { $PillLayout = "v" }
     if ($null -ne $cfg.pill.taskbar) { $PillTaskbar = [bool]$cfg.pill.taskbar }
     if ($cfg.deck.open -in @("hover", "delay", "click")) { $DeckOpen = [string]$cfg.deck.open }
+    if ($cfg.bar.dock -in @("top", "bottom", "left", "right")) { $DockCfg = [string]$cfg.bar.dock }
+    if ($cfg.bar.monitor -eq "all" -or [string]$cfg.bar.monitor -match '^[1-9]$') { $DockMonCfg = [string]$cfg.bar.monitor }
     if ($cfg.pomodoro.enabled) { $PomoCfgEnabled = $true }
     if ($cfg.pomodoro.workMin) { $PomoCfgWork = [Math]::Min(120, [Math]::Max(5, [int]$cfg.pomodoro.workMin)) }
     if ($cfg.pomodoro.breakMin) { $PomoCfgBreak = [Math]::Min(60, [Math]::Max(1, [int]$cfg.pomodoro.breakMin)) }
@@ -1199,6 +1205,486 @@ function Set-TaskbarMode([bool]$on) {
 }
 function Toggle-TaskbarMode { Set-TaskbarMode (-not $script:TaskbarMode) }
 
+# ---- Barra acoplada (bar.dock / bar.monitor) ----------------------------------
+# Otra alternativa a la pildora flotante: una franja pegada a un borde de la
+# pantalla, registrada como AppBar (SHAppBarMessage, el mismo mecanismo que la
+# barra de tareas). Windows le reserva ese espacio: las ventanas maximizadas
+# se quedan fuera y nada la tapa ni ella tapa nada.
+#   bar.dock:    "" apagada | "top" | "bottom" | "left" | "right"
+#   bar.monitor: "primary" (defecto) | "all" (una barra por monitor) | "1".."9"
+#                (monitores numerados de izquierda a derecha)
+# Contenido: un boton por escritorio y los contadores (clic = ir a la sesion)
+# con la antena (panel en maximo foco). Arriba/abajo en una fila con los
+# nombres; a los lados, una columna compacta: solo numero y glifo de estado
+# (el nombre esta en el tooltip).
+#   - Clic en un escritorio = ir; clic derecho = renombrarlo ALLI MISMO
+#     (Enter guarda, Esc cancela); en vertical, en un recuadro a su lado
+#   - Clic derecho en el fondo = el menu de la bandeja
+#   - Con una app a pantalla completa deja de estar encima; vuelve al salir.
+# Si el HUD muere sin quitarla, el Explorador libera el espacio solo al ver
+# que la ventana ya no existe.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class AtalayaAppBar {
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int L; public int T; public int R; public int B; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct APPBARDATA { public uint cbSize; public IntPtr hWnd; public uint uCallbackMessage; public uint uEdge; public RECT rc; public IntPtr lParam; }
+    [DllImport("shell32.dll")] static extern UIntPtr SHAppBarMessage(uint msg, ref APPBARDATA d);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern uint RegisterWindowMessage(string s);
+    [DllImport("user32.dll")] static extern bool MoveWindow(IntPtr h, int x, int y, int w, int hh, bool repaint);
+
+    public static readonly uint CallbackMessage = RegisterWindowMessage("AtalayaAppBarMessage");
+
+    static APPBARDATA Data(IntPtr h) {
+        APPBARDATA d = new APPBARDATA();
+        d.cbSize = (uint)Marshal.SizeOf(typeof(APPBARDATA));
+        d.hWnd = h;
+        return d;
+    }
+    public static bool Register(IntPtr h) {
+        APPBARDATA d = Data(h);
+        d.uCallbackMessage = CallbackMessage;
+        return SHAppBarMessage(0, ref d) != UIntPtr.Zero;                 // ABM_NEW
+    }
+    public static void Remove(IntPtr h) { APPBARDATA d = Data(h); SHAppBarMessage(1, ref d); }   // ABM_REMOVE
+    public static void Activate(IntPtr h) { APPBARDATA d = Data(h); SHAppBarMessage(6, ref d); } // ABM_ACTIVATE
+    public static void PosChanged(IntPtr h) { APPBARDATA d = Data(h); SHAppBarMessage(9, ref d); } // ABM_WINDOWPOSCHANGED
+
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int X; public int Y; }
+    [StructLayout(LayoutKind.Sequential)]
+    struct MONITORINFO { public int cbSize; public RECT rcMonitor; public RECT rcWork; public uint dwFlags; }
+    [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT p, uint flags);
+    [DllImport("user32.dll")] static extern bool GetMonitorInfo(IntPtr mon, ref MONITORINFO mi);
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct DEVMODE {
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmDeviceName;
+        public short dmSpecVersion; public short dmDriverVersion; public short dmSize; public short dmDriverExtra;
+        public int dmFields; public int dmPositionX; public int dmPositionY;
+        public int dmDisplayOrientation; public int dmDisplayFixedOutput;
+        public short dmColor; public short dmDuplex; public short dmYResolution; public short dmTTOption; public short dmCollate;
+        [MarshalAs(UnmanagedType.ByValTStr, SizeConst = 32)] public string dmFormName;
+        public short dmLogPixels; public int dmBitsPerPel; public int dmPelsWidth; public int dmPelsHeight;
+        public int dmDisplayFlags; public int dmDisplayFrequency; public int dmICMMethod; public int dmICMIntent;
+        public int dmMediaType; public int dmDitherType; public int dmReserved1; public int dmReserved2;
+        public int dmPanningWidth; public int dmPanningHeight;
+    }
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool EnumDisplaySettings(string dev, int mode, ref DEVMODE dm);
+
+    // Escala de un monitor RELATIVA a la del sistema: pixeles reales del modo
+    // de video / ancho que ve este proceso (que solo conoce la escala del
+    // sistema, y en monitores con otra escala ve coordenadas virtualizadas).
+    // El Explorador interpreta el grosor pedido en pixeles reales: hay que
+    // multiplicarlo por esto para que reserve lo mismo que ocupa la barra.
+    public static double ScaleFactor(string device, int seenWidth) {
+        DEVMODE dm = new DEVMODE();
+        dm.dmSize = (short)Marshal.SizeOf(typeof(DEVMODE));
+        if (seenWidth <= 0 || !EnumDisplaySettings(device, -1, ref dm) || dm.dmPelsWidth <= 0) return 1.0;  // ENUM_CURRENT_SETTINGS
+        return (double)dm.dmPelsWidth / seenWidth;
+    }
+
+    static void Fit(ref APPBARDATA d, int thick) {
+        switch (d.uEdge) {
+            case 0: d.rc.R = d.rc.L + thick; break;   // ABE_LEFT
+            case 1: d.rc.B = d.rc.T + thick; break;   // ABE_TOP
+            case 2: d.rc.L = d.rc.R - thick; break;   // ABE_RIGHT
+            default: d.rc.T = d.rc.B - thick; break;  // ABE_BOTTOM
+        }
+    }
+    // Pide el hueco en el borde del monitor dado (l..b y reserve en pixeles
+    // reales) y coloca la ventana (thick = grosor como lo ve este proceso)
+    // pegada al area de trabajo que REALMENTE quedo, leida en el momento: asi
+    // cuadra aunque el Explorador haya ajustado algo (barra de tareas, otras
+    // barras, otra escala).
+    public static int[] SetPos(IntPtr h, uint edge, int l, int t, int r, int b, int reserve, int thick) {
+        APPBARDATA d = Data(h);
+        d.uEdge = edge;
+        d.rc.L = l; d.rc.T = t; d.rc.R = r; d.rc.B = b;
+        Fit(ref d, reserve);
+        SHAppBarMessage(2, ref d);                                         // ABM_QUERYPOS
+        Fit(ref d, reserve);
+        SHAppBarMessage(3, ref d);                                         // ABM_SETPOS
+        // Monitor por su esquina de origen: es igual en pixeles reales y en
+        // los de este proceso (el centro no, si la escala es distinta)
+        POINT c; c.X = l + 1; c.Y = t + 1;
+        MONITORINFO mi = new MONITORINFO();
+        mi.cbSize = Marshal.SizeOf(typeof(MONITORINFO));
+        RECT w = d.rc;
+        if (GetMonitorInfo(MonitorFromPoint(c, 2), ref mi)) {
+            RECT k = mi.rcWork;
+            switch (edge) {
+                case 0: w.L = k.L - thick; w.R = k.L; w.T = k.T; w.B = k.B; break;
+                case 1: w.T = k.T - thick; w.B = k.T; w.L = k.L; w.R = k.R; break;
+                case 2: w.L = k.R; w.R = k.R + thick; w.T = k.T; w.B = k.B; break;
+                default: w.T = k.B; w.B = k.B + thick; w.L = k.L; w.R = k.R; break;
+            }
+        }
+        MoveWindow(h, w.L, w.T, w.R - w.L, w.B - w.T, true);
+        return new int[] { w.L, w.T, w.R, w.B };
+    }
+}
+"@
+
+$script:DockBars = New-Object System.Collections.ArrayList   # una entrada por monitor
+$script:DockEdge = ""
+$script:DockMonitor = "primary"
+$script:DockEditing = $false
+$script:DockRenamePopup = $null
+$script:DockClosingByUs = $false
+$DockThick = 30          # alto de la barra horizontal, en DIP
+$DockWidth = 44          # ancho de la barra vertical, en DIP: compacta, solo
+                         # numeros y glifos (el nombre va en el tooltip)
+$DockBg = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x15, 0x1B, 0x23))
+$DockReady = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x3F, 0xB3, 0xA8))
+
+function Test-DockVertical { return $script:DockEdge -in @("left", "right") }
+
+# Monitores numerados de izquierda a derecha (y de arriba abajo si empatan)
+function Get-DockScreensOrdered {
+    return @([System.Windows.Forms.Screen]::AllScreens | Sort-Object { $_.Bounds.X }, { $_.Bounds.Y })
+}
+function Get-DockTargetScreens {
+    $all = Get-DockScreensOrdered
+    if ($script:DockMonitor -eq "all") { return $all }
+    if ($script:DockMonitor -match '^\d+$') {
+        $i = [int]$script:DockMonitor - 1
+        if ($i -ge 0 -and $i -lt $all.Count) { return @($all[$i]) }
+        Write-HudLog "barra acoplada: no hay monitor $($script:DockMonitor); uso el principal"
+    }
+    return @([System.Windows.Forms.Screen]::PrimaryScreen)
+}
+
+function Get-DockByHwnd([long]$h) {
+    foreach ($b in $script:DockBars) { if ($b.Hwnd -eq $h) { return $b } }
+    return $null
+}
+
+function Set-DockPosition($bar) {
+    if (-not $bar.Registered) { return }
+    $scr = $bar.Screen.Bounds
+    $scale = 1.0
+    try { $scale = [Windows.PresentationSource]::FromVisual($bar.Win).CompositionTarget.TransformToDevice.M22 } catch { }
+    $edge = switch ($script:DockEdge) { "left" { 0 } "right" { 2 } "bottom" { 3 } default { 1 } }
+    $thick = if (Test-DockVertical) { $DockWidth } else { $DockThick }
+    $px = [int][Math]::Round($thick * $scale)
+    # El Explorador trabaja en pixeles REALES del monitor; este proceso ve los
+    # monitores con otra escala virtualizados (mismo origen, tamanio /f). El
+    # rectangulo se pide convertido: con el borde izquierdo no se nota (el
+    # origen coincide), pero el derecho o el inferior caian a media pantalla.
+    $f = [AtalayaAppBar]::ScaleFactor($bar.Screen.DeviceName, $scr.Width)
+    $rc = [AtalayaAppBar]::SetPos([IntPtr]$bar.Hwnd, $edge, $scr.Left, $scr.Top,
+        [int]($scr.Left + [Math]::Round($scr.Width * $f)), [int]($scr.Top + [Math]::Round($scr.Height * $f)),
+        [int][Math]::Round($px * $f), $px)
+    # Las barras se avisan entre si al moverse (ABN_POSCHANGED): solo se
+    # registra cuando la posicion cambia de verdad
+    $txt = "{0},{1}-{2},{3}" -f $rc[0], $rc[1], $rc[2], $rc[3]
+    if ($txt -ne $bar.Rect) {
+        $bar.Rect = $txt
+        Write-HudLog ("barra acoplada: {0} en {1} (escala x{2:0.##}) -> {3}" -f $script:DockEdge, $bar.Screen.DeviceName, $f, $txt)
+    }
+}
+
+# Cambio de monitores o resolucion: se rehacen las barras, fuera del gancho
+$script:DockRebuildTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:DockRebuildTimer.Interval = [TimeSpan]::FromMilliseconds(1500)
+$script:DockRebuildTimer.Add_Tick({
+    $script:DockRebuildTimer.Stop()
+    Write-HudLog "barra acoplada: cambio de pantallas, se rehace"
+    Disable-DockBar; Enable-DockBar
+})
+
+$script:DockHook = {
+    param([IntPtr]$hwnd, [int]$msg, [IntPtr]$wParam, [IntPtr]$lParam, [ref]$handled)
+    try {
+        if ([uint32]$msg -eq [AtalayaAppBar]::CallbackMessage) {
+            $bar = Get-DockByHwnd $hwnd.ToInt64()
+            $code = $wParam.ToInt64()
+            if ($code -eq 1 -and $bar) {             # ABN_POSCHANGED: otra barra cambio
+                Set-DockPosition $bar
+            } elseif ($code -eq 2 -and $bar) {       # ABN_FULLSCREENAPP
+                $full = $lParam.ToInt64() -ne 0
+                $bar.Win.Topmost = -not $full
+                if (-not $full) { [AtalayaHotkey]::AssertTopmost($hwnd.ToInt64()) }
+            }
+            $handled.Value = $true
+        } elseif ($msg -eq 0x0006) {                 # WM_ACTIVATE
+            [AtalayaAppBar]::Activate($hwnd)
+        } elseif ($msg -eq 0x0047) {                 # WM_WINDOWPOSCHANGED
+            [AtalayaAppBar]::PosChanged($hwnd)
+        } elseif ($msg -eq 0x007E) {                 # WM_DISPLAYCHANGE
+            $script:DockRebuildTimer.Stop(); $script:DockRebuildTimer.Start()
+        }
+    } catch { Write-HudLog "barra acoplada: gancho: $_" }
+    return [IntPtr]::Zero
+}
+
+function New-DockText([string]$text, $brush, [bool]$bold) {
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = $text; $tb.FontSize = 12; $tb.Foreground = $brush
+    $tb.VerticalAlignment = "Center"; $tb.TextTrimming = "CharacterEllipsis"
+    $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Emoji, Segoe UI")
+    if ($bold) { $tb.FontWeight = "SemiBold" }
+    return $tb
+}
+
+# Regla del HUD: nada de .GetNewClosure(); el dato viaja en Tag
+function New-DockButton($child, $bg, $border, [string]$tip, $tag) {
+    $b = New-Object Windows.Controls.Border
+    $b.CornerRadius = 6; $b.Padding = "8,2"; $b.Cursor = "Hand"; $b.BorderThickness = 1
+    $b.Margin = if (Test-DockVertical) { "0,0,0,4" } else { "0,0,4,0" }
+    $b.VerticalAlignment = "Center"
+    $b.Background = $bg; $b.BorderBrush = $border
+    $b.Child = $child; $b.ToolTip = $tip; $b.Tag = $tag
+    $b.Add_MouseEnter({ param($src, $e) $src.Opacity = 0.8 })
+    $b.Add_MouseLeave({ param($src, $e) $src.Opacity = 1.0 })
+    return $b
+}
+
+function On-DockClick($src, $e) {
+    $e.Handled = $true
+    if ($script:DockEditing) { return }
+    $t = [string]$src.Tag
+    if ($t -eq "panel") { Open-PanelMax }
+    elseif ($t -like "st:*") { Invoke-HubPost "/api/sessions/jump" ("{`"status`":`"" + $t.Substring(3) + "`"}") }
+    else { Go-Desktop ([int]$t) }
+}
+
+# --- Renombrar en el sitio --------------------------------------------------
+function On-DockRightClick($src, $e) {
+    $e.Handled = $true
+    $t = [string]$src.Tag
+    if ($t -notmatch '^\d+$' -or $script:DockEditing) { return }
+    $num = [int]$t
+    $name = ""
+    foreach ($d in (Get-TbDesks $script:LastSummary)) { if ([int]$d.num -eq $num) { $name = [string]$d.name } }
+    $script:DockEditing = $true
+    $box = New-Object Windows.Controls.TextBox
+    $box.Text = $name; $box.Tag = $num; $box.FontSize = 12
+    $box.MinWidth = 90; $box.Padding = "2,0"; $box.BorderThickness = 0
+    $box.Background = $BgRowCur; $box.Foreground = $ColInk; $box.CaretBrush = $ColInk
+    $box.ToolTip = "Enter guarda - Esc cancela"
+    $box.Add_KeyDown({
+        param($s2, $e2)
+        if ($e2.Key -eq "Return") { $e2.Handled = $true; Stop-DockRename $s2 $true }
+        elseif ($e2.Key -eq "Escape") { $e2.Handled = $true; Stop-DockRename $s2 $false }
+    })
+    $box.Add_LostKeyboardFocus({ param($s2, $e2) Stop-DockRename $s2 $false })
+    if (Test-DockVertical) {
+        # No cabe en la columna: recuadro emergente al lado del boton
+        $box.MinWidth = 160; $box.Padding = "6,3"; $box.BorderThickness = 1; $box.BorderBrush = $ColChrome
+        $pop = New-Object Windows.Controls.Primitives.Popup
+        $pop.PlacementTarget = $src
+        $pop.Placement = if ($script:DockEdge -eq "right") { "Left" } else { "Right" }
+        $pop.HorizontalOffset = if ($script:DockEdge -eq "right") { -6 } else { 6 }
+        $pop.StaysOpen = $true; $pop.AllowsTransparency = $true
+        $pop.Child = $box
+        $script:DockRenamePopup = $pop
+        $pop.IsOpen = $true
+        $hs = [Windows.PresentationSource]::FromVisual($box)
+        if ($hs) { [void][AtalayaHotkey]::BringToFront($hs.Handle.ToInt64()) }
+    } else {
+        $src.Child = $box
+        # Foco de teclado sin Window.Activate() (ver BringToFront)
+        $win = [Windows.Window]::GetWindow($src)
+        [void][AtalayaHotkey]::BringToFront((New-Object Windows.Interop.WindowInteropHelper($win)).Handle.ToInt64())
+    }
+    [void]$box.Focus(); $box.SelectAll()
+}
+
+function Stop-DockRename($box, [bool]$save) {
+    if (-not $script:DockEditing) { return }
+    $script:DockEditing = $false
+    if ($script:DockRenamePopup) { $script:DockRenamePopup.IsOpen = $false; $script:DockRenamePopup = $null }
+    if ($save) {
+        $name = ([string]$box.Text).Trim()
+        if ($name) {
+            $body = @{ desktop = [int]$box.Tag; name = $name } | ConvertTo-Json -Compress
+            Invoke-HubPost "/api/desktops/name" $body
+        }
+    }
+    # Repintar ya (con el nombre nuevo provisional) y de nuevo en el siguiente tick
+    foreach ($b in $script:DockBars) { $b.Key = "" }
+    Update-DockBar $script:LastSummary
+}
+
+function Update-DockBar($s) {
+    if ($script:DockBars.Count -eq 0 -or $script:DockEditing) { return }
+    $key = if ($s) {
+        ((Get-TbDesks $s | ForEach-Object { "$($_.num)|$($_.name)|$($_.current)|$($_.needs_you)|$($_.working)" }) -join ";") +
+            "#$($s.needs_you)|$($s.working)|$($s.ready)"
+    } else { "offline" }
+    $vertical = Test-DockVertical
+    foreach ($bar in $script:DockBars) {
+        if ($key -eq $bar.Key) { continue }
+        $bar.Key = $key
+        $desks = $bar.Desks; $tail = $bar.Tail
+        $desks.Children.Clear(); $tail.Children.Clear()
+        if ($null -eq $s) {
+            [void]$desks.Children.Add((New-DockText "Atalaya: hub sin conexion" $ColInk2 $false))
+            continue
+        }
+        foreach ($d in (Get-TbDesks $s)) {
+            $isCur = [bool]$d.current
+            $urgent = [int]$d.needs_you -gt 0
+            $busy = [int]$d.working -gt 0
+            # Glifo ademas de color (tema daltonized), como en la pildora. En
+            # vertical solo cabe uno: el mas importante, y el numero.
+            if ($vertical) {
+                $txt = [string]($d.num + 1)
+                if ($urgent) { $txt = "$GlyphBell$txt" } elseif ($busy) { $txt = "$GlyphGear$txt" } elseif ($isCur) { $txt = "$GlyphHere$txt" }
+            } else {
+                $txt = "$($d.num + 1) $($d.name)"
+                if ($busy)   { $txt = "$GlyphGear $txt" }
+                if ($isCur)  { $txt = "$GlyphHere $txt" }
+                if ($urgent) { $txt = "$GlyphBell $txt" }
+            }
+            $fg = if ($urgent) { $ColAttn } elseif ($isCur) { $ColInk } elseif ($busy) { $ColWork } else { $ColInk2 }
+            $bg = if ($urgent) { $BgUrgent } elseif ($isCur) { $BgRowCur } else { $BgRow }
+            $br = if ($urgent) { $ColAttn } elseif ($isCur) { $ColChrome } else { $ColInk3 }
+            $tip = "$($d.num + 1) $($d.name)$(if ($isCur) { ' (aqui)' }): clic para ir - clic derecho para renombrarlo"
+            if ($busy)   { $tip += " - $($d.working) trabajando" }
+            if ($urgent) { $tip += " - $($d.needs_you) esperando tu respuesta" }
+            $b = New-DockButton (New-DockText $txt $fg ($isCur -or $urgent)) $bg $br $tip ([string]$d.num)
+            if ($vertical) {
+                $b.HorizontalAlignment = "Stretch"; $b.Padding = "0,3"
+                $b.Child.HorizontalAlignment = "Center"
+            }
+            $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
+            $b.Add_MouseRightButtonUp({ param($src, $e) On-DockRightClick $src $e })
+            [void]$desks.Children.Add($b)
+        }
+        $sp = if ($vertical) { "" } else { " " }
+        foreach ($c in @(
+            @{ T = "$GlyphBell$sp$($s.needs_you)"; N = [int]$s.needs_you; B = $ColAttn;   St = "needs_you"; Tip = "te necesita" },
+            @{ T = "$GlyphGear$sp$($s.working)";   N = [int]$s.working;   B = $ColWork;   St = "working";   Tip = "trabajando" },
+            @{ T = "$GlyphCheck$sp$($s.ready)";    N = [int]$s.ready;     B = $DockReady; St = "ready";     Tip = "lista para revisar" })) {
+            $tb = New-DockText $c.T $c.B $true
+            if ($c.N -eq 0) { $tb.Opacity = 0.45 }
+            $b = New-DockButton $tb $BgRow $BgRow "$($c.N) $($c.Tip) - clic: ir a la que mas tiempo lleva asi" ("st:" + $c.St)
+            $b.Padding = if ($vertical) { "0,2" } else { "5,2" }
+            $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
+            [void]$tail.Children.Add($b)
+        }
+        $b = New-DockButton (New-DockText $GlyphDish $ColInk2 $false) $BgRow $BgRow "Abrir Atalaya en maximo foco" "panel"
+        $b.Padding = if ($vertical) { "0,2" } else { "5,2" }
+        $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
+        [void]$tail.Children.Add($b)
+    }
+}
+
+function New-DockWindow($screen) {
+    $vertical = Test-DockVertical
+    $w = New-Object Windows.Window
+    $w.Title = "Atalaya barra"
+    $w.WindowStyle = "None"; $w.ResizeMode = "NoResize"
+    $w.ShowInTaskbar = $false; $w.ShowActivated = $false; $w.Topmost = $true
+    $w.Background = $DockBg
+    $w.Width = 400; $w.Height = $DockThick; $w.Left = -32000; $w.Top = -32000
+    # Escritorios al principio; contadores y antena al final (derecha o abajo)
+    $dp = New-Object Windows.Controls.DockPanel
+    $dp.LastChildFill = $true
+    $tail = New-Object Windows.Controls.WrapPanel
+    $desks = New-Object Windows.Controls.StackPanel
+    if ($vertical) {
+        $dp.Margin = "3,6,3,6"
+        [Windows.Controls.DockPanel]::SetDock($tail, "Bottom")
+        $tail.HorizontalAlignment = "Center"; $tail.Orientation = "Vertical"
+        $desks.Orientation = "Vertical"
+    } else {
+        $dp.Margin = "6,0,6,0"
+        [Windows.Controls.DockPanel]::SetDock($tail, "Right")
+        $tail.VerticalAlignment = "Center"
+        $desks.Orientation = "Horizontal"; $desks.VerticalAlignment = "Center"
+    }
+    [void]$dp.Children.Add($tail); [void]$dp.Children.Add($desks)
+    $w.Content = $dp
+    # Clic derecho en el fondo = el menu completo de la bandeja
+    $w.Add_MouseRightButtonUp({ param($src, $e) $trayMenu.Show([System.Windows.Forms.Control]::MousePosition) })
+    $w.Add_Closing({ param($src, $e) if (-not $script:DockClosingByUs) { $e.Cancel = $true } })
+    $w.Show()
+    $hwnd = (New-Object Windows.Interop.WindowInteropHelper($w)).Handle
+    ([Windows.Interop.HwndSource]::FromHwnd($hwnd)).AddHook($script:DockHook)
+    $bar = [PSCustomObject]@{
+        Win = $w; Hwnd = $hwnd.ToInt64(); Screen = $screen; Registered = $false
+        Key = ""; Desks = $desks; Tail = $tail; Rect = ""
+    }
+    $bar.Registered = [AtalayaAppBar]::Register($hwnd)
+    if (-not $bar.Registered) { Write-HudLog "barra acoplada: Windows no acepto el registro en $($screen.DeviceName)" }
+    [void]$script:DockBars.Add($bar)
+    Set-DockPosition $bar
+    # Fuera de Alt+Tab y anclada a todos los escritorios (el truco del estilo
+    # de herramientas va dentro de Pin-WindowToAllDesktops)
+    Pin-WindowToAllDesktops $w "barra acoplada"
+}
+
+function Enable-DockBar {
+    if ($script:DockBars.Count -gt 0 -or -not $script:DockEdge) { return }
+    foreach ($scr in (Get-DockTargetScreens)) {
+        try { New-DockWindow $scr } catch { Write-HudLog "barra acoplada: $($scr.DeviceName): $_" }
+    }
+    Update-DockBar $script:LastSummary
+}
+
+function Disable-DockBar {
+    $script:DockEditing = $false
+    $script:DockClosingByUs = $true
+    foreach ($bar in @($script:DockBars)) {
+        if ($bar.Registered) { [AtalayaAppBar]::Remove([IntPtr]$bar.Hwnd) }
+        try { $bar.Win.Close() } catch { }
+    }
+    $script:DockClosingByUs = $false
+    if ($script:DockBars.Count) { Write-HudLog "barra acoplada: quitada" }
+    $script:DockBars.Clear()
+}
+
+# Desde la bandeja: se aplica ya y se guarda en config.json (bar.*), las
+# mismas claves que los selectores de Ajustes.
+function Set-DockMode([string]$edge, [string]$monitor) {
+    if ($edge -notin @("top", "bottom", "left", "right")) { $edge = "" }
+    if ($monitor -ne "all" -and $monitor -notmatch '^[1-9]$') { $monitor = "primary" }
+    Disable-DockBar
+    $script:DockEdge = $edge
+    $script:DockMonitor = $monitor
+    Enable-DockBar
+    Invoke-HubPost "/api/config" "{`"bar`":{`"dock`":`"$edge`",`"monitor`":`"$monitor`"}}"
+    Update-TrayMenuState
+}
+
+# Submenu de la bandeja: borde (excluyentes) y monitor (lista real, se rehace
+# al abrirlo por si cambiaron las pantallas). El valor viaja en Tag.
+function On-DockMenuEdge($sender, $e) { Set-DockMode ([string]$sender.Tag) $script:DockMonitor }
+function On-DockMenuMonitor($sender, $e) {
+    $edge = if ($script:DockEdge) { $script:DockEdge } else { "top" }
+    Set-DockMode $edge ([string]$sender.Tag)
+}
+function Update-DockMenu {
+    if (-not $script:TrayDock) { return }
+    $items = $script:TrayDock.DropDownItems
+    $items.Clear()
+    foreach ($o in @(@("", "No"), @("top", "Arriba"), @("bottom", "Abajo"), @("left", "Izquierda"), @("right", "Derecha"))) {
+        $it = New-Object System.Windows.Forms.ToolStripMenuItem
+        $it.Text = $o[1]; $it.Tag = $o[0]; $it.Checked = $script:DockEdge -eq $o[0]
+        $it.Add_Click({ param($sender, $e) On-DockMenuEdge $sender $e })
+        [void]$items.Add($it)
+    }
+    [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    $mons = @(@("primary", "En el monitor principal"), @("all", "En todos los monitores"))
+    $i = 0
+    foreach ($scr in (Get-DockScreensOrdered)) {
+        $i++
+        $desc = "Monitor $i"
+        if ($scr.Primary) { $desc += " (principal)" }
+        $desc += " - $($scr.Bounds.Width)x$($scr.Bounds.Height)"
+        $mons += , @([string]$i, $desc)
+    }
+    foreach ($o in $mons) {
+        $it = New-Object System.Windows.Forms.ToolStripMenuItem
+        $it.Text = $o[1]; $it.Tag = $o[0]; $it.Checked = $script:DockMonitor -eq $o[0]
+        $it.Add_Click({ param($sender, $e) On-DockMenuMonitor $sender $e })
+        [void]$items.Add($it)
+    }
+}
+
 # Cada tick: anclaje pendiente y quien tenia el foco (para devolverselo)
 function Watch-TaskbarAnchor {
     if (-not $script:TbAnchor) { return }
@@ -1239,6 +1725,7 @@ function Update-Hud {
         $script:LastSummary = $null
         Update-TrayStatus $null
         Update-TaskbarAnchor $null
+        Update-DockBar $null
         Update-Deck $null
         return
     }
@@ -1373,6 +1860,7 @@ function Update-Hud {
     $script:LastSummary = $s
     Update-TrayStatus $s
     Update-TaskbarAnchor $s
+    Update-DockBar $s
     Update-Deck $s
     Set-CornerPosition
 }
@@ -2168,6 +2656,7 @@ $txtPomo.Add_MouseLeftButtonDown({
     $e.Handled = $true
     Toggle-Pomodoro
 })
+$txtPomo.Add_MouseRightButtonUp({ param($src, $e) $e.Handled = $true })
 $txtPomo.Add_MouseRightButtonDown({
     param($src, $e)
     $e.Handled = $true
@@ -2273,7 +2762,6 @@ function Apply-PillCompact {
             $txtPomo.Margin = "12,0,0,0"
         }
     }
-    try { $miCompact.IsChecked = $c } catch { }
 }
 
 # Windows 11 manda los iconos nuevos de la bandeja al desbordamiento (la
@@ -2326,6 +2814,7 @@ function Update-TrayMenuState {
         if ($script:TrayPillToggle) { $script:TrayPillToggle.Checked = -not $script:PillHidden }
         if ($script:TrayCompact) { $script:TrayCompact.Checked = [bool]$script:PillCompact }
         if ($script:TrayTaskbar) { $script:TrayTaskbar.Checked = [bool]$script:TaskbarMode }
+        if ($script:TrayDock) { $script:TrayDock.Checked = [bool]$script:DockEdge }
     } catch { }
 }
 
@@ -2466,66 +2955,9 @@ $window.Add_MouseLeftButtonDown({
     }
 })
 
-$menu = New-Object System.Windows.Controls.ContextMenu
-$miPanel = New-Object System.Windows.Controls.MenuItem
-$miPanel.Header = "Mostrar/ocultar panel"; $miPanel.InputGestureText = $Hotkeys.togglePanel
-$miPanel.Add_Click({ Toggle-Panel })
-$miPanelMax = New-Object System.Windows.Controls.MenuItem
-$miPanelMax.Header = "Abrir panel en maximo foco"
-$miPanelMax.Add_Click({ Open-PanelMax })
-$miJump = New-Object System.Windows.Controls.MenuItem
-$miJump.Header = "Ir a la sesion urgente"; $miJump.InputGestureText = $Hotkeys.jumpUrgent
-$miJump.Add_Click({ Jump-Urgent })
-$miRename = New-Object System.Windows.Controls.MenuItem
-$miRename.Header = "Renombrar este escritorio"; $miRename.InputGestureText = $Hotkeys.renameDesktop
-$miRename.Add_Click({ Rename-CurrentDesktop })
-$miMovePrev = New-Object System.Windows.Controls.MenuItem
-$miMovePrev.Header = "Mover este escritorio a la izquierda"; $miMovePrev.InputGestureText = $Hotkeys.moveDeskPrev
-$miMovePrev.Add_Click({ Move-CurrentDesktop -1 })
-$miMoveNext = New-Object System.Windows.Controls.MenuItem
-$miMoveNext.Header = "Mover este escritorio a la derecha"; $miMoveNext.InputGestureText = $Hotkeys.moveDeskNext
-$miMoveNext.Add_Click({ Move-CurrentDesktop 1 })
-$miClear = New-Object System.Windows.Controls.MenuItem
-$miClear.Header = "Apartar la ultima ventana de la pildora"; $miClear.InputGestureText = $Hotkeys.clearWindow
-$miClear.Add_Click({ Invoke-ClearWindow })
-$miPomo = New-Object System.Windows.Controls.MenuItem
-$miPomo.Header = "Pomodoro: iniciar/pausar"; $miPomo.InputGestureText = $Hotkeys.pomodoro
-$miPomo.Add_Click({ Toggle-Pomodoro })
-$miHome = New-Object System.Windows.Controls.MenuItem
-$miHome.Header = "Recentrar la pildora"; $miHome.InputGestureText = $Hotkeys.recenterPill
-$miHome.Add_Click({ Move-PillHome })
-$miHide = New-Object System.Windows.Controls.MenuItem
-$miHide.Header = "Ocultar la pildora (queda en la bandeja)"; $miHide.InputGestureText = $Hotkeys.togglePill
-$miHide.Add_Click({ Hide-Pill })
-$miHide15 = New-Object System.Windows.Controls.MenuItem
-$miHide15.Header = "Ocultar 15 minutos"
-$miHide15.Add_Click({ Hide-PillFor 15 })
-$miCompact = New-Object System.Windows.Controls.MenuItem
-$miCompact.Header = "Pildora compacta"; $miCompact.InputGestureText = $Hotkeys.compactPill
-$miCompact.IsCheckable = $true
-$miCompact.Add_Click({ Set-PillCompact ([bool]$miCompact.IsChecked) })
-$miPin = New-Object System.Windows.Controls.MenuItem; $miPin.Header = "Anclar a todos los escritorios"
-$miPin.Add_Click({ Pin-ToAllDesktops })
-$miExit = New-Object System.Windows.Controls.MenuItem; $miExit.Header = "Salir del HUD"
-$miExit.Add_Click({ $window.Close() })
-[void]$menu.Items.Add($miPanel)
-[void]$menu.Items.Add($miPanelMax)
-[void]$menu.Items.Add($miJump)
-[void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
-[void]$menu.Items.Add($miRename)
-[void]$menu.Items.Add($miMovePrev)
-[void]$menu.Items.Add($miMoveNext)
-[void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
-[void]$menu.Items.Add($miClear)
-[void]$menu.Items.Add($miPomo)
-[void]$menu.Items.Add($miHome)
-[void]$menu.Items.Add($miCompact)
-[void]$menu.Items.Add($miHide)
-[void]$menu.Items.Add($miHide15)
-[void]$menu.Items.Add($miPin)
-[void]$menu.Items.Add((New-Object System.Windows.Controls.Separator))
-[void]$menu.Items.Add($miExit)
-$window.ContextMenu = $menu
+# Clic derecho en la pildora = el mismo menu que la bandeja y la barra
+# acoplada (uno solo, ordenado por uso; se engancha mas abajo, cuando
+# $trayMenu ya existe). Antes tenia su propio menu WPF con otra lista.
 
 # ---- Icono en la bandeja del sistema -----------------------------------------
 # La pildora flota y se puede perder (otro monitor, otro escritorio, detras de
@@ -2595,6 +3027,12 @@ $smShow = Add-TraySubmenu "Mostrar"
 $script:TrayPillToggle = Add-TrayItem "Pildora" $Hotkeys.togglePill { Toggle-Pill } $smShow
 $script:TrayCompact = Add-TrayItem "Pildora compacta" $Hotkeys.compactPill { Toggle-PillCompact } $smShow
 $script:TrayTaskbar = Add-TrayItem "Escritorios en la barra de tareas" "" { Toggle-TaskbarMode } $smShow
+# Submenu con borde y monitor; se rellena al abrirse (Update-DockMenu)
+$script:TrayDock = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:TrayDock.Text = "Barra acoplada"
+[void]$script:TrayDock.DropDownItems.Add("...")
+$script:TrayDock.Add_DropDownOpening({ Update-DockMenu })
+[void]$smShow.DropDownItems.Add($script:TrayDock)
 $null = Add-TrayItem "Ocultar la pildora 15 minutos" "" { Hide-PillFor 15 } $smShow
 Add-TraySep $smShow
 $null = Add-TrayItem "Deck (mostrar/ocultar)" $Hotkeys.toggleDeck {
@@ -2625,6 +3063,11 @@ $null = Add-TrayItem "Cerrar el HUD (el hub sigue)" "" { $window.Close() } $smMa
 $null = Add-TrayItem "Salir de Atalaya" "" { Exit-Atalaya }
 
 $script:Tray.ContextMenuStrip = $trayMenu
+$window.Add_MouseRightButtonUp({
+    param($src, $e)
+    $e.Handled = $true
+    $trayMenu.Show([System.Windows.Forms.Control]::MousePosition)
+})
 
 # El menu de la bandeja es de WinForms y se cierra "solo" gracias a un filtro
 # de mensajes que necesita el bucle de WinForms (Application.Run). Aqui el
@@ -2767,6 +3210,9 @@ $window.Add_ContentRendered({
     $timer.Start()
     Pin-ToAllDesktops
     if ($script:TaskbarMode) { Enable-TaskbarAnchor }
+    $script:DockEdge = $DockCfg
+    $script:DockMonitor = $DockMonCfg
+    if ($script:DockEdge) { Enable-DockBar }
     Register-Hotkeys
     Update-TrayMenuState
     if ($script:DeckPinned) {
@@ -2781,6 +3227,7 @@ $window.Add_ContentRendered({
 $window.Add_Closed({
     $timer.Stop()
     Disable-TaskbarAnchor
+    Disable-DockBar
     # Sin esto queda un icono fantasma en la bandeja hasta que el usuario pasa
     # el raton por encima.
     try {

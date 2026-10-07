@@ -6,8 +6,9 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 
 ## [0.20.0] - 2026-10-07
 
-Los escritorios también se pueden manejar desde la barra de tareas, para
-quien prefiere no tener la píldora encima de su trabajo.
+Los escritorios también se pueden manejar desde la barra de tareas o desde
+una barra acoplada a un borde, para quien prefiere no tener la píldora encima
+de su trabajo.
 
 ### Añadido
 - **Escritorios en la barra de tareas** (opcional: bandeja → *Mostrar*, o
@@ -28,8 +29,27 @@ quien prefiere no tener la píldora encima de su trabajo.
   escritorio, un clic solo cuenta si un gancho de ratón de bajo nivel (en su
   propio hilo) vio uno hace menos de 800 ms y el puntero está sobre la barra
   o la miniatura.
+- **Barra acoplada** (opcional: bandeja → *Mostrar* → *Barra acoplada*, o
+  Ajustes; `bar.dock` y `bar.monitor`): franja fija con los escritorios que
+  reserva su espacio como la barra de tareas (AppBar de Windows).
+  - borde arriba, abajo, izquierda o derecha; en los laterales, compacta
+    (número y estado; el nombre en el tooltip);
+  - en el monitor principal, en todos o en uno concreto; se recoloca sola al
+    conectar o cambiar monitores;
+  - clic = ir al escritorio o a la sesión del contador; clic derecho =
+    renombrar en el sitio; clic derecho en el fondo = menú de Atalaya.
+
+  Detalles técnicos: Explorer interpreta el rectángulo del AppBar en píxeles
+  físicos, y el HUD (consciente solo del DPI del sistema) ve los monitores
+  con otra escala reducidos. Se convierte con el factor real del monitor
+  (`EnumDisplaySettings`) y la ventana se coloca dentro del área de trabajo
+  que devuelve Windows; sin eso, en un monitor al 175 % la barra derecha
+  quedaba a media pantalla.
 
 ### Cambiado
+- **Un solo menú contextual**: el clic derecho en la píldora abría un menú
+  propio, antiguo y desordenado; ahora es el mismo de la bandeja y de la
+  barra acoplada.
 - **Menú de la bandeja reorganizado por uso**: arriba ir a la sesión que te
   necesita (inactivo si nadie espera), abrir el panel y recentrar la píldora;
   lo ocasional en los submenús *Mostrar*, *Escritorio*, *Utilidades* y

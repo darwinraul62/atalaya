@@ -275,6 +275,25 @@
           <option value="never">nunca (siempre opaca)</option>
         </select>
       </label>
+      <label>Barra acoplada (reserva una franja de pantalla con los escritorios)
+        <select id="setDock">
+          <option value="">no</option>
+          <option value="top">arriba</option>
+          <option value="bottom">abajo (encima de la barra de tareas)</option>
+          <option value="left">izquierda</option>
+          <option value="right">derecha</option>
+        </select>
+      </label>
+      <label>Monitor de la barra acoplada
+        <select id="setDockMonitor">
+          <option value="primary">el principal</option>
+          <option value="all">todos (una barra en cada uno)</option>
+          <option value="1">monitor 1 (contando de izquierda a derecha)</option>
+          <option value="2">monitor 2</option>
+          <option value="3">monitor 3</option>
+          <option value="4">monitor 4</option>
+        </select>
+      </label>
       <label>Orientación de la píldora
         <select id="setLayout">
           <option value="h">horizontal (una línea)</option>
@@ -832,6 +851,8 @@ settingsBtn.addEventListener("click", async () => {
     document.getElementById("setDim").value = (cfg.pill && cfg.pill.dim) || "idle";
     document.getElementById("setLayout").value = (cfg.pill && cfg.pill.layout) || "h";
     document.getElementById("setTaskbar").checked = !!(cfg.pill && cfg.pill.taskbar);
+    document.getElementById("setDock").value = (cfg.bar && cfg.bar.dock) || "";
+    document.getElementById("setDockMonitor").value = (cfg.bar && cfg.bar.monitor) || "primary";
     document.getElementById("setDeckOpen").value = (cfg.deck && cfg.deck.open) || "click";
     document.getElementById("setPomoEnabled").checked = !!(cfg.pomodoro && cfg.pomodoro.enabled);
     document.getElementById("setPomoWork").value = (cfg.pomodoro && cfg.pomodoro.workMin) || 25;
@@ -862,6 +883,10 @@ document.getElementById("setSave").addEventListener("click", async () => {
     taskbar: document.getElementById("setTaskbar").checked,
   };
   const deck = { open: document.getElementById("setDeckOpen").value };
+  const bar = {
+    dock: document.getElementById("setDock").value,
+    monitor: document.getElementById("setDockMonitor").value,
+  };
   const pomodoro = {
     enabled: document.getElementById("setPomoEnabled").checked,
     workMin: Number(document.getElementById("setPomoWork").value) || 25,
@@ -873,7 +898,7 @@ document.getElementById("setSave").addEventListener("click", async () => {
   };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill, deck, pomodoro, update });
+    const r = await postJson("/api/config", { hotkeys, pill, bar, deck, pomodoro, update });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";

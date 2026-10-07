@@ -1221,6 +1221,17 @@ const server = http.createServer(async (req, res) => {
         cfg.pill.taskbar = !!body.pill.taskbar;
       }
     }
+    if (body.bar && typeof body.bar === "object") {
+      cfg.bar = { ...cfg.bar };
+      if (body.bar.dock !== undefined) {
+        const v = String(body.bar.dock);
+        cfg.bar.dock = ["top", "bottom", "left", "right"].includes(v) ? v : "";
+      }
+      if (body.bar.monitor !== undefined) {
+        const v = String(body.bar.monitor);
+        cfg.bar.monitor = v === "all" || /^[1-9]$/.test(v) ? v : "primary";
+      }
+    }
     if (body.deck && typeof body.deck === "object") {
       cfg.deck = { ...cfg.deck };
       if (body.deck.open !== undefined) {

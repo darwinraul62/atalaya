@@ -98,13 +98,16 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     - arriba lo diario: **ir a la sesión que te necesita** (en gris si nadie
       espera), **abrir el panel** y **recentrar la píldora**;
     - en submenús lo ocasional: **Mostrar** (píldora, compacta, ocultar 15
-      min, escritorios en la barra de tareas, deck, máximo foco),
+      min, escritorios en la barra de tareas, barra acoplada, deck, máximo
+      foco),
       **Escritorio** (renombrar, mover, anclar) y **Utilidades** (pomodoro,
       apartar ventana);
     - abajo **Ajustes**, **Mantenimiento** (actualizar — el submenú lo avisa
       si hay versión nueva —, reiniciar o cerrar el HUD) y **Salir**.
 
-    Se cierra con **Esc** o con un clic fuera, sin tener que elegir nada.
+    Se cierra con **Esc** o con un clic fuera, sin tener que elegir nada. Es
+    el mismo menú que sale con clic derecho en la píldora y en la barra
+    acoplada.
   - **Ocultar la píldora** (`Ctrl+Alt+O`) deja Atalaya funcionando entero
     (atajos, toasts, alertas vistas) sin nada flotando en pantalla: se maneja
     desde la bandeja. La preferencia se recuerda entre reinicios. **Ocultar 15
@@ -135,6 +138,20 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   - Limitación de Windows: el botón aparece también en **Alt+Tab** (todo lo
     que lo saca de Alt+Tab lo saca también de la barra); elegirlo ahí no hace
     nada.
+- **Barra acoplada** (opcional; bandeja → *Mostrar* → *Barra acoplada*, o en
+  Ajustes): una franja fija pegada a un borde de la pantalla con un botón por
+  escritorio. Windows la trata como la barra de tareas: **reserva su
+  espacio**, así que las ventanas maximizadas no la tapan y ella no tapa nada.
+  - **Borde**: arriba, abajo, izquierda o derecha. En los laterales es
+    compacta: número y estado de cada escritorio; el nombre sale al pasar el
+    ratón.
+  - **Monitor**: el principal (por defecto), todos (una barra en cada uno) o
+    uno concreto (numerados de izquierda a derecha).
+  - **Clic** en un escritorio = ir a él; en un contador = saltar a esa
+    sesión; **☰** = panel. **Clic derecho** en un escritorio = renombrarlo
+    ahí mismo (Enter guarda, Esc cancela); en el fondo = el menú de Atalaya.
+  - En monitores con otra escala (p. ej. 175 %) la barra se ve algo borrosa:
+    Windows la estira porque el HUD trabaja con una sola escala.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
   clic y estás ahí; **clic derecho = renombrar ese escritorio** (el nombre ya
   está a la vista ahí, es el camino más corto). El actual se marca con ◉ (y
