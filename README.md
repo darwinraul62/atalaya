@@ -93,10 +93,18 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     **recentra**. Un clic accidental no te descoloca la píldora.
   - **Doble clic** = abrir el panel.
   - **Clic derecho** = menú completo, con el resumen en vivo arriba
-    (`2 te necesitan · 1 trabajando · 3 listas`) y todas las acciones
-    importantes con su atajo escrito al lado: recentrar la píldora,
-    mostrarla/ocultarla, abrir el panel, ir a la sesión que te necesita,
-    deck, pomodoro, apartar ventana, Ajustes, reiniciar y salir.
+    (`2 te necesitan · 1 trabajando · 3 listas`) y las acciones ordenadas por
+    uso, cada una con su atajo escrito al lado:
+    - arriba lo diario: **ir a la sesión que te necesita** (en gris si nadie
+      espera), **abrir el panel** y **recentrar la píldora**;
+    - en submenús lo ocasional: **Mostrar** (píldora, compacta, ocultar 15
+      min, escritorios en la barra de tareas, deck, máximo foco),
+      **Escritorio** (renombrar, mover, anclar) y **Utilidades** (pomodoro,
+      apartar ventana);
+    - abajo **Ajustes**, **Mantenimiento** (actualizar — el submenú lo avisa
+      si hay versión nueva —, reiniciar o cerrar el HUD) y **Salir**.
+
+    Se cierra con **Esc** o con un clic fuera, sin tener que elegir nada.
   - **Ocultar la píldora** (`Ctrl+Alt+O`) deja Atalaya funcionando entero
     (atajos, toasts, alertas vistas) sin nada flotando en pantalla: se maneja
     desde la bandeja. La preferencia se recuerda entre reinicios. **Ocultar 15
@@ -109,6 +117,24 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   - La primera vez, Atalaya deja su icono **a la vista en la barra de tareas**
     (Windows 11 lo mandaría al desbordamiento **^**). Si luego lo mueves tú,
     se respeta tu decisión.
+- **Escritorios en la barra de tareas** (opcional; clic derecho en la bandeja
+  → *Mostrar* → *Escritorios en la barra de tareas*, o en Ajustes): para
+  quien prefiere no tener nada flotando. Atalaya pone **su propio botón en la
+  barra de tareas**, que convive con la píldora; con la píldora oculta queda
+  como única vista.
+  - **Etiqueta**: solo los contadores que no están en cero (`🔔 2  ⚙ 1`);
+    sin nada pendiente, solo el icono. Si alguien te necesita, además una
+    **insignia ámbar** con el número y una barra ámbar bajo el botón.
+  - **Pasar el ratón**: una tarjeta con una línea por escritorio (◉ el
+    actual, ⚙ en azul con trabajo, 🔔 en ámbar si te necesita) y debajo un
+    botón por escritorio (hasta 6) más **☰** para abrir el panel. Clic en la
+    imagen de la tarjeta = abrir el panel.
+  - **Clic en el icono**: la misma lista en grande, clicable. Se cierra con un
+    clic fuera, Esc o al elegir.
+  - **✕ de la miniatura**: quita el botón (Atalaya avisa de cómo volver).
+  - Limitación de Windows: el botón aparece también en **Alt+Tab** (todo lo
+    que lo saca de Alt+Tab lo saca también de la barra); elegirlo ahí no hace
+    nada.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
   clic y estás ahí; **clic derecho = renombrar ese escritorio** (el nombre ya
   está a la vista ahí, es el camino más corto). El actual se marca con ◉ (y
@@ -127,9 +153,8 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     En reposo se atenúa solo cuando no hay nada nuevo; la preferencia
     `Atenuar la píldora` (Ajustes) permite que **nunca** se atenúe. Su topmost
     se reafirma cada 3 s, así que flota sobre **todo** — otras apps topmost e
-    incluso la **barra de tareas** si la arrastras sobre ella. (En Ajustes hay
-    una preferencia opcional, apagada por defecto, para darle además un botón
-    en la barra de tareas.)
+    incluso la **barra de tareas** si la arrastras sobre ella. No aparece en
+    **Alt+Tab**.
   - **Orientación**: horizontal (una línea) o **vertical** (columna), en
     Ajustes.
   - Si una ventana te queda **debajo de la píldora** (un chat, un indicador),

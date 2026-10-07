@@ -4,6 +4,51 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [0.20.0] - 2026-10-07
+
+Los escritorios también se pueden manejar desde la barra de tareas, para
+quien prefiere no tener la píldora encima de su trabajo.
+
+### Añadido
+- **Escritorios en la barra de tareas** (opcional: bandeja → *Mostrar*, o
+  Ajustes; se recuerda entre reinicios). Un botón propio de Atalaya en la
+  barra, independiente de la píldora:
+  - etiqueta con solo los contadores distintos de cero, e insignia y barra
+    ámbar cuando alguien te necesita;
+  - al pasar el ratón, una miniatura dibujada por Atalaya con una línea por
+    escritorio, y debajo botones de escritorio (hasta 6) y **☰** para el
+    panel;
+  - clic en el icono = la lista en grande y clicable; clic en la miniatura =
+    panel; la **✕** de la miniatura quita el modo y avisa de cómo volver.
+
+  Detalles técnicos: es una ventana «ancla» de 1×1 fuera de pantalla, en
+  estado normal (minimizada, el clic la restauraba con un destello), anclada
+  a todos los escritorios y **después** marcada `WS_EX_NOACTIVATE`. Como
+  Windows también le pasa el foco al cerrarse otras ventanas o al cambiar de
+  escritorio, un clic solo cuenta si un gancho de ratón de bajo nivel (en su
+  propio hilo) vio uno hace menos de 800 ms y el puntero está sobre la barra
+  o la miniatura.
+
+### Cambiado
+- **Menú de la bandeja reorganizado por uso**: arriba ir a la sesión que te
+  necesita (inactivo si nadie espera), abrir el panel y recentrar la píldora;
+  lo ocasional en los submenús *Mostrar*, *Escritorio*, *Utilidades* y
+  *Mantenimiento* (que avisa en su título si hay versión nueva).
+- **`pill.taskbar` cambia de significado**: antes ponía la *píldora* en la
+  barra de tareas (no servía para nada); ahora activa los escritorios en la
+  barra.
+
+### Corregido
+- **El menú de la bandeja no se cerraba** sin elegir una acción: es de
+  WinForms y depende de un filtro de mensajes que solo existe con el bucle de
+  WinForms, y el HUD corre sobre el de WPF. Ahora se cierra con Esc o con un
+  clic fuera.
+- **La píldora aparecía en Alt+Tab.** WPF la oculta de la barra dándole un
+  propietario invisible, y Alt+Tab mostraba la píldora en su lugar. Ahora es
+  ventana de herramientas; como esas no se dejan anclar a todos los
+  escritorios, el estilo se quita para anclarla y se vuelve a poner (el
+  anclaje sobrevive).
+
 ## [0.19.0] - 2026-10-04
 
 La píldora se puede quitar de en medio sin perderla: ocultarla ya no cierra

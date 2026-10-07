@@ -9,6 +9,8 @@
 # - Reporta la ventana activa al hub para apagar alertas ya leidas
 # - Icono en la bandeja del sistema (junto al reloj) con menu completo: es el
 #   ancla permanente de la app, y desde ahi se recupera la pildora si se pierde
+# - Opcional (pill.taskbar): escritorios en la barra de tareas, como
+#   alternativa a la pildora flotante
 # Ejecutar con bin\Atalaya.exe --hud (o powershell.exe, que tambien es STA).
 # Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin
 # BOM.
@@ -52,6 +54,25 @@ public static class AtalayaHotkey {
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT p);
 
     public static long Foreground() { return GetForegroundWindow().ToInt64(); }
+
+    // WS_EX_TOOLWINDOW saca una ventana de Alt+Tab. La pildora lo necesita:
+    // WPF la esconde de la barra con un propietario invisible, y Alt+Tab, al
+    // no poder mostrar al propietario, mostraba la pildora en su lugar. OJO:
+    // una ventana de herramientas NO se puede anclar a todos los escritorios
+    // (no es una "vista" para el shell), pero si se ancla ANTES conserva el
+    // anclaje. Ver Pin-WindowToAllDesktops.
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
+    public static void SetToolWindow(long h, bool on) {
+        IntPtr w = new IntPtr(h);
+        if (h == 0 || !IsWindow(w)) return;
+        int ex = GetWindowLong(w, -20);                       // GWL_EXSTYLE
+        SetWindowLong(w, -20, on ? (ex | 0x80) : (ex & ~0x80));
+    }
+
+    // Boton (raton o tecla) pulsado ahora mismo, o desde la consulta anterior
+    [DllImport("user32.dll")] static extern short GetAsyncKeyState(int vk);
+    public static bool KeyDown(int vk) { return (GetAsyncKeyState(vk) & 0x8001) != 0; }
 
     // El puntero esta FISICAMENTE sobre esta ventana? El IsMouseOver de WPF se
     // cae en falso durante un instante cada vez que se reconstruye el
@@ -175,9 +196,9 @@ $PillCorner = ""
 $MaxPins = 0
 $PillDim = "idle"     # "idle": atenuar cuando no hay actividad nueva; "never": siempre opaca
 $PillLayout = "h"     # "h" horizontal (una linea) / "v" vertical (columna)
-$PillTaskbar = $false # boton en la barra de tareas (apagado: la pildora flota
-                      # sobre TODO, incluida la barra, gracias al topmost
-                      # reafirmado; activar solo si se quiere el boton)
+$PillTaskbar = $false # escritorios en la barra de tareas (boton propio de
+                      # Atalaya con miniatura y botones por escritorio). Antes
+                      # ponia la PILDORA en la barra; ese uso desaparecio.
 $DeckOpen = "click"   # "click": boton/hotkey; "delay": hover ~600ms; "hover": hover inmediato
 $PomoCfgEnabled = $false
 $PomoCfgWork = 25
@@ -326,7 +347,7 @@ try {
 } catch { }
 
 # Preferencias de presentacion de la pildora
-$window.ShowInTaskbar = [bool]$PillTaskbar
+$script:TaskbarMode = [bool]$PillTaskbar
 $Vertical = $PillLayout -eq "v"
 if ($Vertical) {
     # Columna: cada bloque en su fila, alineado a la izquierda
@@ -502,7 +523,7 @@ function Invoke-VDesk([string]$vArgs) {
     else { Write-HudLog "VirtualDesktop.exe no encontrado (tools\get-virtualdesktop.ps1)" }
 }
 
-function Go-Desktop([int]$n)  { Invoke-VDesk "/Switch:$n" }
+function Go-Desktop([int]$n)  { $script:TbSuppressUntil = (Get-Date).AddSeconds(2); Invoke-VDesk "/Switch:$n" }
 function Go-NextDesktop       { Invoke-VDesk "/Wrap /Right" }
 function Go-PrevDesktop       { Invoke-VDesk "/Wrap /Left" }
 function New-VirtualDesktop   { Invoke-VDesk "/New /Switch" }
@@ -558,12 +579,18 @@ function Pin-WindowToAllDesktops([System.Windows.Window]$win, [string]$name) {
         $helper = New-Object System.Windows.Interop.WindowInteropHelper($win)
         $hwnd = $helper.Handle.ToInt64()
         if ($hwnd -eq 0) { return }
+        # Fuera de Alt+Tab = ventana de herramientas, pero esas no se dejan
+        # anclar: se quita el estilo, se ancla y se vuelve a poner (el anclaje
+        # sobrevive). Solo si no tiene boton en la barra (pill.taskbar).
+        $tool = -not $win.ShowInTaskbar
+        if ($tool) { [AtalayaHotkey]::SetToolWindow($hwnd, $false) }
         # /PinWindowHandle acepta un handle numerico o texto contenido en el
         # titulo. (/PinWindow es OTRA cosa: ancla un proceso por nombre o PID.)
         $p = Start-Process -FilePath $exe.FullName -ArgumentList "/PinWindowHandle:$hwnd" `
             -WindowStyle Hidden -PassThru -Wait
         $chk = Start-Process -FilePath $exe.FullName -ArgumentList "/IsWindowHandlePinned:$hwnd" `
             -WindowStyle Hidden -PassThru -Wait
+        if ($tool) { [AtalayaHotkey]::SetToolWindow($hwnd, $true) }
         if ($chk.ExitCode -eq 0) { Write-HudLog "pin OK ($name hwnd=$hwnd)" }
         else { Write-HudLog "pin fallo ($name hwnd=$hwnd, exit=$($p.ExitCode))" }
     } catch {
@@ -572,6 +599,611 @@ function Pin-WindowToAllDesktops([System.Windows.Window]$win, [string]$name) {
 }
 
 function Pin-ToAllDesktops { Pin-WindowToAllDesktops $window "HUD" }
+
+# ---- Escritorios en la barra de tareas (pill.taskbar) -------------------------
+# Alternativa a la pildora para quien no quiere nada flotando: un boton propio
+# de Atalaya en la barra de tareas. Convive con la pildora (se activan por
+# separado) y con "Ocultar la pildora" queda como unica vista.
+#   - Etiqueta del boton: solo los contadores que no estan en cero
+#   - Hover: miniatura dibujada por nosotros (una linea por escritorio) y
+#     debajo hasta 6 botones de escritorio + uno para abrir el panel
+#   - Insignia ambar con el numero de sesiones que te necesitan
+#   - Clic en el icono: tarjeta emergente con la lista, clicable
+#   - Clic en la imagen de la miniatura: abre el panel
+#   - X de la miniatura: desactiva el modo (se reactiva desde la bandeja)
+#
+# Lecciones de la prueba previa:
+#   - La "ancla" es una ventana 1x1 fuera de pantalla, en estado NORMAL: si se
+#     minimiza, el clic en el boton la restaura con animacion (destello).
+#   - WS_EX_NOACTIVATE + WS_EX_APPWINDOW la dejan en la barra y fuera de
+#     Alt+Tab (WS_EX_TOOLWINDOW la saca tambien de la barra). Se aplica DESPUES
+#     de anclarla a todos los escritorios: con el estilo puesto no se deja.
+#   - Windows le pasa el foco tambien cuando se cierra otra ventana o se
+#     cambia de escritorio: solo cuenta como clic si hubo una entrada del
+#     usuario hace muy poco y el raton esta sobre la barra o la miniatura.
+#   - La X de la miniatura ACTIVA la ventana antes de mandar SC_CLOSE: la
+#     accion del clic se difiere un instante para poder cancelarla.
+Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class AtalayaTaskbar {
+    [StructLayout(LayoutKind.Sequential)]
+    struct BITMAPINFOHEADER {
+        public uint biSize; public int biWidth; public int biHeight;
+        public ushort biPlanes; public ushort biBitCount; public uint biCompression;
+        public uint biSizeImage; public int biXPelsPerMeter; public int biYPelsPerMeter;
+        public uint biClrUsed; public uint biClrImportant;
+    }
+    [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int attr, ref int val, int size);
+    [DllImport("dwmapi.dll")] static extern int DwmSetIconicThumbnail(IntPtr h, IntPtr hbmp, uint flags);
+    [DllImport("dwmapi.dll")] static extern int DwmInvalidateIconicBitmaps(IntPtr h);
+    [DllImport("gdi32.dll")] static extern IntPtr CreateDIBSection(IntPtr hdc, ref BITMAPINFOHEADER bi, uint usage, out IntPtr bits, IntPtr sec, uint off);
+    [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
+    [DllImport("user32.dll")] static extern int SetWindowLong(IntPtr h, int i, int v);
+    [ComImport, Guid("56FDF342-FD6D-11d0-958A-006097C9A090"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface ITaskbarList { void HrInit(); void AddTab(IntPtr h); void DeleteTab(IntPtr h); void ActivateTab(IntPtr h); void SetActiveAlt(IntPtr h); }
+    [ComImport, Guid("56FDF344-FD6D-11d0-958A-006097C9A090")] class TaskbarListObj { }
+
+    // Miniatura propia: 7 = FORCE_ICONIC_REPRESENTATION, 10 = HAS_ICONIC_BITMAP,
+    // 11 = DISALLOW_PEEK (sin vista previa a pantalla completa al pasar)
+    public static void EnableIconic(IntPtr h) {
+        int on = 1;
+        DwmSetWindowAttribute(h, 7, ref on, 4);
+        DwmSetWindowAttribute(h, 10, ref on, 4);
+        DwmSetWindowAttribute(h, 11, ref on, 4);
+    }
+    public static int Invalidate(IntPtr h) { return DwmInvalidateIconicBitmaps(h); }
+
+    // bgra: 32 bpp premultiplicado (Pbgra32 de WPF), filas de arriba abajo
+    public static int SetThumbnail(IntPtr h, byte[] bgra, int w, int hgt) {
+        BITMAPINFOHEADER bi = new BITMAPINFOHEADER();
+        bi.biSize = (uint)Marshal.SizeOf(typeof(BITMAPINFOHEADER));
+        bi.biWidth = w; bi.biHeight = -hgt; bi.biPlanes = 1; bi.biBitCount = 32;
+        IntPtr bits;
+        IntPtr hbmp = CreateDIBSection(IntPtr.Zero, ref bi, 0, out bits, IntPtr.Zero, 0);
+        if (hbmp == IntPtr.Zero) return -1;
+        Marshal.Copy(bgra, 0, bits, w * hgt * 4);
+        int hr = DwmSetIconicThumbnail(h, hbmp, 0);
+        DeleteObject(hbmp);
+        return hr;
+    }
+
+    // En la barra pero fuera de Alt+Tab: + NOACTIVATE, + APPWINDOW
+    public static void MakeNoActivate(IntPtr h) {
+        SetWindowLong(h, -20, GetWindowLong(h, -20) | 0x8000000 | 0x40000);
+        ITaskbarList t = (ITaskbarList)new TaskbarListObj();
+        t.HrInit();
+        t.AddTab(h);
+    }
+
+    // Ultimo clic izquierdo en CUALQUIER sitio (la barra de tareas es otro
+    // proceso: GetAsyncKeyState no ve sus clics de forma fiable). Gancho de
+    // raton de bajo nivel en un hilo PROPIO con su bucle de mensajes: si el
+    // hilo de la interfaz del HUD esta ocupado (p. ej. un Start-Process -Wait)
+    // el raton del sistema no se resiente.
+    delegate IntPtr LowLevelProc(int code, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, LowLevelProc fn, IntPtr mod, uint thread);
+    [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int code, IntPtr wParam, IntPtr lParam);
+    [DllImport("user32.dll")] static extern int GetMessage(out MSG m, IntPtr h, uint min, uint max);
+    [DllImport("kernel32.dll")] static extern IntPtr GetModuleHandle(string name);
+    [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr h; public uint msg; public IntPtr w; public IntPtr l; public uint t; public int x; public int y; }
+    static LowLevelProc hookProc;   // referencia viva: si el GC la recoge, el gancho revienta
+    static IntPtr hook = IntPtr.Zero;
+    static long lastClick = 0;
+    static long clickCount = 0;
+    public static void StartClickWatch() {
+        if (hookProc != null) return;
+        hookProc = new LowLevelProc(OnMouse);
+        System.Threading.Thread t = new System.Threading.Thread(delegate() {
+            hook = SetWindowsHookEx(14, hookProc, GetModuleHandle(null), 0);   // WH_MOUSE_LL
+            MSG m;
+            while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0) { }
+        });
+        t.IsBackground = true;
+        t.Start();
+    }
+    static IntPtr OnMouse(int code, IntPtr wParam, IntPtr lParam) {
+        if (code >= 0 && (wParam.ToInt32() == 0x0201 || wParam.ToInt32() == 0x0202)) {   // L down / up
+            System.Threading.Interlocked.Exchange(ref lastClick, Environment.TickCount);
+        }
+        if (code >= 0 && (wParam.ToInt32() == 0x0201 || wParam.ToInt32() == 0x0204)) {   // L / R down
+            System.Threading.Interlocked.Increment(ref clickCount);
+        }
+        return CallNextHookEx(hook, code, wParam, lParam);
+    }
+    // Pulsaciones (izq./der.) desde el arranque: para "hubo un clic despues de X"
+    public static long ClickCount() { return System.Threading.Interlocked.Read(ref clickCount); }
+    public static long MsSinceClick() {
+        long c = System.Threading.Interlocked.Read(ref lastClick);
+        if (c == 0) return long.MaxValue;
+        return (uint)Environment.TickCount - (uint)c;
+    }
+}
+"@
+
+$script:TbAnchor = $null
+$script:TbHwnd = [IntPtr]::Zero
+$script:TbPinned = $false
+$script:TbPinTries = 0
+$script:TbKey = ""
+$script:TbSummary = $null
+$script:TbPending = ""
+$script:TbClosingByUs = $false
+$script:TbSuppressUntil = [DateTime]::MinValue
+$script:TbPrevFg = 0
+$script:TbPopup = $null
+$script:TbPopupHwnd = 0
+$script:TbPopupClosedAt = [DateTime]::MinValue
+
+function New-TbBrush([string]$hex) {
+    $b = New-Object Windows.Media.SolidColorBrush ([Windows.Media.ColorConverter]::ConvertFromString($hex))
+    $b.Freeze(); return $b
+}
+$TbDark   = New-TbBrush "#151B23"
+$TbCalm   = New-TbBrush "#2A3340"
+$TbInk    = New-TbBrush "#F2F5F8"
+$TbBorder = New-TbBrush "#44536A"
+$TbAttn   = New-TbBrush "#E0A33F"
+$TbWork   = New-TbBrush "#5B9CD9"
+$GlyphMenu = [char]::ConvertFromUtf32(0x2630)   # trigrama: abrir el panel
+
+# Icono de 32 px para un boton de la miniatura: numero grande, glifo de
+# estado en la esquina y color de fondo (glifo + color: tema daltonized).
+# WPF no pinta emoji a color: los glifos salen monocromos, que es lo que se
+# quiere aqui.
+function New-TbIcon([string]$label, [string]$glyph, $bg, $fg, [bool]$current) {
+    $size = 32
+    $ci = [Globalization.CultureInfo]::InvariantCulture
+    $dv = New-Object Windows.Media.DrawingVisual
+    $dc = $dv.RenderOpen()
+    $pen = if ($current) { New-Object Windows.Media.Pen($TbInk, 3) } else { $null }
+    $dc.DrawRoundedRectangle($bg, $pen, [Windows.Rect]::new(1.5, 1.5, ($size - 3), ($size - 3)), 6, 6)
+    $ft = New-Object Windows.Media.FormattedText($label, $ci, "LeftToRight",
+        (New-Object Windows.Media.Typeface("Segoe UI Semibold")), 20, $fg, 1.0)
+    $dc.DrawText($ft, [Windows.Point]::new((($size - $ft.Width) / 2), (($size - $ft.Height) / 2)))
+    if ($glyph) {
+        $fg2 = New-Object Windows.Media.FormattedText($glyph, $ci, "LeftToRight",
+            (New-Object Windows.Media.Typeface("Segoe UI Symbol")), 11, $fg, 1.0)
+        $dc.DrawText($fg2, [Windows.Point]::new(($size - $fg2.Width - 2), 0))
+    }
+    $dc.Close()
+    $bmp = New-Object Windows.Media.Imaging.RenderTargetBitmap($size, $size, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
+    $bmp.Render($dv); $bmp.Freeze()
+    return $bmp
+}
+
+function New-TbBadge([int]$count) {
+    $ci = [Globalization.CultureInfo]::InvariantCulture
+    $dv = New-Object Windows.Media.DrawingVisual
+    $dc = $dv.RenderOpen()
+    $dc.DrawEllipse($TbAttn, (New-Object Windows.Media.Pen($TbDark, 2)), [Windows.Point]::new(16, 16), 15, 15)
+    $txt = if ($count -gt 9) { "9+" } else { [string]$count }
+    $ft = New-Object Windows.Media.FormattedText($txt, $ci, "LeftToRight",
+        (New-Object Windows.Media.Typeface("Segoe UI Black")), 19, $TbDark, 1.0)
+    $dc.DrawText($ft, [Windows.Point]::new(((32 - $ft.Width) / 2), ((32 - $ft.Height) / 2)))
+    $dc.Close()
+    $bmp = New-Object Windows.Media.Imaging.RenderTargetBitmap(32, 32, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
+    $bmp.Render($dv); $bmp.Freeze()
+    return $bmp
+}
+
+function Get-TbDesks($s) {
+    if ($null -eq $s) { return @() }
+    return @($s.deck | Where-Object { $null -ne $_.num })
+}
+
+function Get-TbHeadline($s) {
+    if ($null -eq $s) { return "Hub sin conexion" }
+    return "$GlyphBell $($s.needs_you)    $GlyphGear $($s.working)    $GlyphCheck $($s.ready)"
+}
+
+# Miniatura: cabecera con los contadores y una linea por escritorio. Las filas
+# se encogen para caber en el alto que da Windows (~108 px).
+function Send-TbThumbnail([IntPtr]$hwnd, [int]$maxW, [int]$maxH) {
+    $s = $script:TbSummary
+    $desks = Get-TbDesks $s
+    $headH = 20
+    $w = [Math]::Max(60, [Math]::Min($maxW, 260))
+    $h = [Math]::Max(40, $maxH)
+    $rowH = [Math]::Min(22, [Math]::Floor(($h - $headH - 4) / [Math]::Max(1, $desks.Count)))
+    $fs = [Math]::Max(9, [Math]::Min(13, $rowH * 0.62))
+    $h = [Math]::Min($h, [int]($headH + 4 + $rowH * [Math]::Max(1, $desks.Count)))
+
+    $ci = [Globalization.CultureInfo]::InvariantCulture
+    $tf   = New-Object Windows.Media.Typeface("Segoe UI")
+    $tfb  = New-Object Windows.Media.Typeface("Segoe UI Semibold")
+    $tsym = New-Object Windows.Media.Typeface("Segoe UI Symbol")
+    $dv = New-Object Windows.Media.DrawingVisual
+    $dc = $dv.RenderOpen()
+    $dc.DrawRoundedRectangle($TbDark, $null, [Windows.Rect]::new(0, 0, $w, $h), 8, 8)
+    $hcol = if ($s -and [int]$s.needs_you -gt 0) { $TbAttn } else { $TbInk }
+    $ftH = New-Object Windows.Media.FormattedText((Get-TbHeadline $s), $ci, "LeftToRight", $tsym, 12, $hcol, 1.0)
+    $dc.DrawText($ftH, [Windows.Point]::new(8, 3))
+    $y = $headH
+    foreach ($d in $desks) {
+        if ($y + $rowH -gt $h) { break }
+        $isCur = [bool]$d.current
+        $urgent = [int]$d.needs_you -gt 0
+        $busy = [int]$d.working -gt 0
+        $ty = $y + ($rowH - $fs * 1.33) / 2
+        if ($isCur) {
+            $dc.DrawRoundedRectangle($TbCalm, $null, [Windows.Rect]::new(3, $y, ($w - 6), $rowH), 4, 4)
+            $ftM = New-Object Windows.Media.FormattedText($GlyphHere, $ci, "LeftToRight", $tsym, $fs, $TbInk, 1.0)
+            $dc.DrawText($ftM, [Windows.Point]::new(7, $ty))
+        }
+        $col = if ($urgent) { $TbAttn } elseif ($busy) { $TbWork } else { $TbInk }
+        $face = if ($isCur) { $tfb } else { $tf }
+        $ftN = New-Object Windows.Media.FormattedText("$($d.num + 1)  $($d.name)", $ci, "LeftToRight", $face, $fs, $col, 1.0)
+        $ftN.MaxTextWidth = [Math]::Max(10, $w - 80); $ftN.MaxLineCount = 1; $ftN.Trimming = "CharacterEllipsis"
+        $dc.DrawText($ftN, [Windows.Point]::new(22, $ty))
+        $st = @()
+        if ($urgent) { $st += "$GlyphBell$($d.needs_you)" }
+        if ($busy)   { $st += "$GlyphGear$($d.working)" }
+        if ($st.Count) {
+            $ftS = New-Object Windows.Media.FormattedText(($st -join " "), $ci, "LeftToRight", $tsym, $fs, $col, 1.0)
+            $dc.DrawText($ftS, [Windows.Point]::new(($w - $ftS.Width - 7), $ty))
+        }
+        $y += $rowH
+    }
+    $dc.Close()
+    $bmp = New-Object Windows.Media.Imaging.RenderTargetBitmap($w, $h, 96, 96, [Windows.Media.PixelFormats]::Pbgra32)
+    $bmp.Render($dv)
+    $bytes = New-Object byte[] ($w * $h * 4)
+    $bmp.CopyPixels($bytes, $w * 4, 0)
+    [void][AtalayaTaskbar]::SetThumbnail($hwnd, $bytes, $w, $h)
+}
+
+# Botones de la miniatura. Regla del HUD: nada de .GetNewClosure(); el numero
+# de escritorio viaja en CommandParameter (-1 = abrir el panel).
+function On-TbThumbButton($src, $e) {
+    $n = [int]$src.CommandParameter
+    if ($n -lt 0) { Open-Panel } else { Go-Desktop $n }
+}
+
+function Update-TaskbarAnchor($s) {
+    if (-not $script:TbAnchor) { return }
+    $tbi = $script:TbAnchor.TaskbarItemInfo
+    if ($null -eq $s) {
+        $script:TbAnchor.Title = ""
+        $tbi.Overlay = $null; $tbi.ProgressState = "None"
+        $tbi.Description = "Atalaya: hub sin conexion"
+        $script:TbSummary = $null; $script:TbKey = ""
+        return
+    }
+    # Solo se reconstruye si algo cambio (evita parpadeo de la miniatura)
+    $key = (Get-TbDesks $s | ForEach-Object { "$($_.num)|$($_.name)|$($_.current)|$($_.needs_you)|$($_.working)" }) -join ";"
+    $key += "#$($s.needs_you)|$($s.working)|$($s.ready)"
+    $script:TbSummary = $s
+    if ($key -eq $script:TbKey) { return }
+    $script:TbKey = $key
+
+    # 7 huecos: hasta 6 escritorios + el del panel (el resto, en la tarjeta)
+    $desks = Get-TbDesks $s
+    if ($desks.Count -gt 6) { $desks = $desks[0..5] }
+    $tbi.ThumbButtonInfos.Clear()
+    foreach ($d in $desks) {
+        $isCur = [bool]$d.current
+        $urgent = [int]$d.needs_you -gt 0
+        $busy = [int]$d.working -gt 0
+        $bg = if ($urgent) { $TbAttn } elseif ($busy) { $TbWork } else { $TbCalm }
+        $fg = if ($urgent) { $TbDark } else { $TbInk }
+        $glyph = if ($urgent) { $GlyphBell } elseif ($busy) { $GlyphGear } else { "" }
+        $tip = "$($d.num + 1) $($d.name)"
+        if ($isCur)  { $tip = "$GlyphHere $tip (aqui)" }
+        if ($urgent) { $tip += " - $GlyphBell $($d.needs_you) te necesita" }
+        if ($busy)   { $tip += " - $GlyphGear $($d.working) trabajando" }
+        $b = New-Object Windows.Shell.ThumbButtonInfo
+        $b.ImageSource = New-TbIcon ([string]($d.num + 1)) $glyph $bg $fg $isCur
+        $b.Description = $tip
+        $b.CommandParameter = [int]$d.num
+        $b.DismissWhenClicked = $true
+        $b.Add_Click({ param($src, $e) On-TbThumbButton $src $e })
+        $tbi.ThumbButtonInfos.Add($b)
+    }
+    $b = New-Object Windows.Shell.ThumbButtonInfo
+    $b.ImageSource = New-TbIcon $GlyphMenu "" $TbDark $TbInk $false
+    $b.Description = "Abrir el panel de Atalaya"
+    $b.CommandParameter = -1
+    $b.DismissWhenClicked = $true
+    $b.Add_Click({ param($src, $e) On-TbThumbButton $src $e })
+    $tbi.ThumbButtonInfos.Add($b)
+
+    # Sin hover: insignia y barra ambar bajo el boton cuando alguien espera
+    if ([int]$s.needs_you -gt 0) {
+        $tbi.Overlay = New-TbBadge ([int]$s.needs_you)
+        $tbi.ProgressState = "Paused"
+        $tbi.ProgressValue = 1.0
+    } else {
+        $tbi.Overlay = $null
+        $tbi.ProgressState = "None"
+    }
+    $tbi.Description = "Atalaya - " + (Get-TbHeadline $s)
+    # Etiqueta: solo los contadores que no estan en cero, sin el nombre (con
+    # etiquetas visibles en la barra, un titulo largo hace crecer el boton).
+    $parts = @()
+    if ([int]$s.needs_you -gt 0) { $parts += "$GlyphBell $($s.needs_you)" }
+    if ([int]$s.working -gt 0)   { $parts += "$GlyphGear $($s.working)" }
+    if ([int]$s.ready -gt 0)     { $parts += "$GlyphCheck $($s.ready)" }
+    $script:TbAnchor.Title = $parts -join "  "
+    if ($script:TbHwnd -ne [IntPtr]::Zero) { [void][AtalayaTaskbar]::Invalidate($script:TbHwnd) }
+}
+
+# Anclar a todos los escritorios y, solo despues, pasar a no-activable (con
+# ese estilo puesto el anclaje falla). Se reintenta en los primeros ticks.
+function Pin-TaskbarAnchor {
+    if (-not $script:TbAnchor -or $script:TbPinned -or $script:TbPinTries -ge 10) { return }
+    $script:TbPinTries++
+    $exe = Get-ChildItem -Path (Join-Path $RepoRoot "tools") -Filter "VirtualDesktop*.exe" | Select-Object -First 1
+    $h = $script:TbHwnd.ToInt64()
+    if ($exe) {
+        [void](Start-Process -FilePath $exe.FullName -ArgumentList "/PinWindowHandle:$h" -WindowStyle Hidden -PassThru -Wait)
+        $chk = Start-Process -FilePath $exe.FullName -ArgumentList "/IsWindowHandlePinned:$h" -WindowStyle Hidden -PassThru -Wait
+        $script:TbPinned = $chk.ExitCode -eq 0
+    }
+    if ($script:TbPinned -or -not $exe -or $script:TbPinTries -ge 10) {
+        if (-not $script:TbPinned) { Write-HudLog "barra: no pude anclar el boton a todos los escritorios" }
+        $script:TbPinned = $true   # no reintentar mas
+        try { [AtalayaTaskbar]::MakeNoActivate($script:TbHwnd) } catch { Write-HudLog "barra: estilo: $_" }
+        Write-HudLog "barra: boton listo (hwnd=$h)"
+    }
+}
+
+# --- Que provoco la activacion de la ancla ----------------------------------
+#   - sobre la barra de tareas (fuera del area de trabajo) -> "icono"
+#   - en la franja justo encima de la barra (la miniatura)  -> "miniatura"
+#   - cualquier otra cosa (foco heredado, cambio de escritorio, sin clic
+#     reciente)                                             -> "otra"
+# Ademas tiene que haber un clic izquierdo real hace muy poco (gancho de raton,
+# ver StartClickWatch): elegirla con Alt+Tab (teclado) no debe disparar nada. Alt+Tab la muestra igualmente:
+# todo lo que la saca de Alt+Tab (WS_EX_TOOLWINDOW, ocultarla) la saca
+# tambien de la barra, asi que es una limitacion de Windows asumida.
+function Get-TbActivationSource {
+    if ((Get-Date) -lt $script:TbSuppressUntil) { return "otra" }
+    if ([AtalayaTaskbar]::MsSinceClick() -gt 800) { return "otra" }
+    $pt = [System.Windows.Forms.Control]::MousePosition
+    $scr = [System.Windows.Forms.Screen]::FromPoint($pt)
+    $wa = $scr.WorkingArea; $bd = $scr.Bounds
+    if (-not $wa.Contains($pt)) { return "icono" }
+    $scale = 1.0
+    try { $scale = [Windows.PresentationSource]::FromVisual($script:TbAnchor).CompositionTarget.TransformToDevice.M22 } catch { }
+    if ($wa.Top -gt $bd.Top)         { $dist = $pt.Y - $wa.Top }
+    elseif ($wa.Left -gt $bd.Left)   { $dist = $pt.X - $wa.Left }
+    elseif ($wa.Right -lt $bd.Right) { $dist = $wa.Right - $pt.X }
+    else                             { $dist = $wa.Bottom - $pt.Y }
+    if ($dist -lt 260 * $scale) { return "miniatura" }
+    return "otra"
+}
+
+function Restore-TbForeground {
+    if ($script:TbPrevFg) { [void][AtalayaHotkey]::BringToFront($script:TbPrevFg) }
+}
+
+# Accion diferida del clic (ver la nota de la X arriba)
+$script:TbActTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:TbActTimer.Interval = [TimeSpan]::FromMilliseconds(200)
+$script:TbActTimer.Add_Tick({
+    $script:TbActTimer.Stop()
+    $a = $script:TbPending; $script:TbPending = ""
+    try {
+        switch ($a) {
+            "icono"     { Show-TbPopup }
+            "miniatura" { Open-Panel }
+            "cerrar"    {
+                Set-TaskbarMode $false
+                try {
+                    $script:Tray.ShowBalloonTip(5000, "Atalaya",
+                        "Quitado de la barra de tareas. Para volver: clic derecho en el icono de Atalaya junto al reloj > Mostrar > Escritorios en la barra de tareas.",
+                        [System.Windows.Forms.ToolTipIcon]::Info)
+                } catch { }
+            }
+        }
+    } catch { Write-HudLog "barra: accion '$a': $_" }
+})
+
+$script:TbHook = {
+    param([IntPtr]$hwnd, [int]$msg, [IntPtr]$wParam, [IntPtr]$lParam, [ref]$handled)
+    try {
+        if ($msg -eq 0x0323) {          # WM_DWMSENDICONICTHUMBNAIL
+            $l = $lParam.ToInt64()
+            Send-TbThumbnail $hwnd ([int](($l -shr 16) -band 0xFFFF)) ([int]($l -band 0xFFFF))
+            $handled.Value = $true
+        } elseif ($msg -eq 0x0112) {    # WM_SYSCOMMAND
+            $cmd = $wParam.ToInt64() -band 0xFFF0
+            if ($cmd -eq 0xF020 -or $cmd -eq 0xF120 -or $cmd -eq 0xF030) {
+                $handled.Value = $true   # sin minimizar/restaurar/maximizar
+            } elseif ($cmd -eq 0xF060) {
+                # X de la miniatura o "Cerrar ventana": quitar el modo, sin
+                # cerrar desde dentro del gancho
+                $handled.Value = $true
+                $script:TbPending = "cerrar"
+                $script:TbActTimer.Stop(); $script:TbActTimer.Start()
+            }
+        }
+    } catch { Write-HudLog "barra: gancho: $_" }
+    return [IntPtr]::Zero
+}
+
+# --- Tarjeta emergente del clic en el icono ----------------------------------
+# Lo mismo que la miniatura, grande y clicable. Se crea cada vez (asi sale en
+# el escritorio actual). Se cierra con un clic FUERA de ella (gancho de raton),
+# con Esc o al elegir algo. No basta con "perdio el foco": justo despues de
+# abrirse, la barra de tareas termina de procesar el clic y le quita el foco,
+# y la tarjeta se cerraba nada mas salir (parecia aleatorio).
+$script:TbPopupOpenedAt = [DateTime]::MinValue
+$script:TbPopupClicks = 0
+$script:TbPopupWatch = New-Object System.Windows.Threading.DispatcherTimer
+$script:TbPopupWatch.Interval = [TimeSpan]::FromMilliseconds(80)
+$script:TbPopupWatch.Add_Tick({
+    if (-not $script:TbPopup) { $script:TbPopupWatch.Stop(); return }
+    if ([AtalayaTaskbar]::ClickCount() -ne $script:TbPopupClicks) {
+        $script:TbPopupClicks = [AtalayaTaskbar]::ClickCount()
+        if (-not [AtalayaHotkey]::PointerOver($script:TbPopupHwnd)) { Close-TbPopup }
+    }
+})
+function Close-TbPopup {
+    if ($script:TbPopup) {
+        $p = $script:TbPopup; $script:TbPopup = $null; $script:TbPopupHwnd = 0
+        $script:TbPopupClosedAt = Get-Date
+        # Al cerrarse, Windows le pasa el foco a la ancla: no es un clic (sin
+        # esto, elegir un escritorio en la tarjeta abria ademas el panel)
+        $script:TbSuppressUntil = (Get-Date).AddMilliseconds(800)
+        try { $p.Close() } catch { }
+    }
+}
+
+function On-TbPopupRow([int]$n) {
+    Close-TbPopup
+    if ($n -lt 0) { Open-Panel } else { Go-Desktop $n }
+}
+
+function New-TbPopupRow([string]$text, $fg, $bg, [int]$tag, [bool]$bold) {
+    $b = New-Object Windows.Controls.Border
+    $b.CornerRadius = 6; $b.Padding = "10,5"; $b.Margin = "0,2,0,0"; $b.Cursor = "Hand"
+    $b.Background = $bg; $b.Tag = $tag
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = $text; $tb.FontSize = 13.5; $tb.Foreground = $fg
+    $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI, Segoe UI Symbol")
+    if ($bold) { $tb.FontWeight = "SemiBold" }
+    $b.Child = $tb
+    $b.Add_MouseEnter({ param($src, $e) $src.Opacity = 0.75 })
+    $b.Add_MouseLeave({ param($src, $e) $src.Opacity = 1.0 })
+    $b.Add_MouseLeftButtonUp({ param($src, $e) On-TbPopupRow ([int]$src.Tag) })
+    return $b
+}
+
+function Show-TbPopup {
+    # (Un segundo clic en el icono con la tarjeta abierta la cierra: es un clic
+    # fuera, y la activacion que sigue cae en la supresion de Close-TbPopup.)
+    Close-TbPopup
+    $s = $script:TbSummary
+    $pop = New-Object Windows.Window
+    $pop.WindowStyle = "None"; $pop.AllowsTransparency = $true
+    $pop.Background = [Windows.Media.Brushes]::Transparent
+    $pop.Topmost = $true; $pop.ShowInTaskbar = $false; $pop.SizeToContent = "WidthAndHeight"
+    $pop.ResizeMode = "NoResize"; $pop.Opacity = 0; $pop.Left = -32000; $pop.Top = -32000
+
+    $border = New-Object Windows.Controls.Border
+    $border.CornerRadius = 10; $border.Background = $TbDark; $border.BorderBrush = $TbBorder
+    $border.BorderThickness = 1; $border.Padding = "8"; $border.MinWidth = 230
+    $stack = New-Object Windows.Controls.StackPanel
+    $border.Child = $stack
+    $pop.Content = $border
+
+    $ht = New-Object Windows.Controls.TextBlock
+    $ht.Text = Get-TbHeadline $s; $ht.FontSize = 12.5; $ht.Margin = "6,0,0,4"
+    $ht.Foreground = if ($s -and [int]$s.needs_you -gt 0) { $TbAttn } else { $TbInk }
+    $ht.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Symbol")
+    [void]$stack.Children.Add($ht)
+    foreach ($d in (Get-TbDesks $s)) {
+        $isCur = [bool]$d.current
+        $urgent = [int]$d.needs_you -gt 0
+        $busy = [int]$d.working -gt 0
+        $txt = "$($d.num + 1)  $($d.name)"
+        $txt = if ($isCur) { "$GlyphHere $txt" } else { "     $txt" }
+        if ($urgent) { $txt += "   $GlyphBell $($d.needs_you)" }
+        if ($busy)   { $txt += "   $GlyphGear $($d.working)" }
+        $fg = if ($urgent) { $TbAttn } elseif ($busy) { $TbWork } else { $TbInk }
+        $bg = if ($isCur) { $TbCalm } else { [Windows.Media.Brushes]::Transparent }
+        [void]$stack.Children.Add((New-TbPopupRow $txt $fg $bg ([int]$d.num) $isCur))
+    }
+    $sep = New-Object Windows.Controls.Border
+    $sep.Height = 1; $sep.Background = $TbBorder; $sep.Margin = "4,6,4,2"
+    [void]$stack.Children.Add($sep)
+    [void]$stack.Children.Add((New-TbPopupRow "$GlyphMenu  Abrir el panel" $TbInk $TbCalm -1 $false))
+
+    $pop.Add_Deactivated({
+        if (((Get-Date) - $script:TbPopupOpenedAt).TotalMilliseconds -gt 600) { Close-TbPopup }
+    })
+    $pop.Add_KeyDown({ param($src, $e) if ($e.Key -eq "Escape") { Close-TbPopup } })
+    $script:TbPopup = $pop
+    $pop.Show()
+    $pop.UpdateLayout()
+    $script:TbPopupHwnd = (New-Object Windows.Interop.WindowInteropHelper($pop)).Handle.ToInt64()
+    [AtalayaHotkey]::SetToolWindow($script:TbPopupHwnd, $true)   # fuera de Alt+Tab
+
+    # Centrada en el raton, pegada al borde de la barra
+    $pt = [System.Windows.Forms.Control]::MousePosition
+    $scr = [System.Windows.Forms.Screen]::FromPoint($pt)
+    $m = [Windows.PresentationSource]::FromVisual($pop).CompositionTarget.TransformFromDevice
+    $p  = $m.Transform([Windows.Point]::new($pt.X, $pt.Y))
+    $tl = $m.Transform([Windows.Point]::new($scr.WorkingArea.Left, $scr.WorkingArea.Top))
+    $br = $m.Transform([Windows.Point]::new($scr.WorkingArea.Right, $scr.WorkingArea.Bottom))
+    $w = $pop.ActualWidth; $h = $pop.ActualHeight
+    $pop.Left = [Math]::Max($tl.X + 8, [Math]::Min($p.X - $w / 2, $br.X - $w - 8))
+    $pop.Top = if ($scr.WorkingArea.Top -gt $scr.Bounds.Top) { $tl.Y + 8 } else { $br.Y - $h - 8 }
+    $pop.Opacity = 1
+    $script:TbPopupOpenedAt = Get-Date
+    $script:TbPopupClicks = [AtalayaTaskbar]::ClickCount()
+    $script:TbPopupWatch.Start()
+    # SetForegroundWindow, no Window.Activate() (ver BringToFront)
+    [void][AtalayaHotkey]::BringToFront($script:TbPopupHwnd)
+}
+
+# --- Encender / apagar -------------------------------------------------------
+function Enable-TaskbarAnchor {
+    if ($script:TbAnchor) { return }
+    $a = New-Object Windows.Window
+    $a.Title = ""
+    $a.Width = 1; $a.Height = 1; $a.Left = -32000; $a.Top = -32000
+    $a.ShowActivated = $false; $a.ShowInTaskbar = $true
+    try { $a.Icon = $window.Icon } catch { }
+    $a.TaskbarItemInfo = New-Object Windows.Shell.TaskbarItemInfo
+    $a.Add_SourceInitialized({
+        $script:TbHwnd = (New-Object Windows.Interop.WindowInteropHelper($script:TbAnchor)).Handle
+        ([Windows.Interop.HwndSource]::FromHwnd($script:TbHwnd)).AddHook($script:TbHook)
+        [AtalayaTaskbar]::EnableIconic($script:TbHwnd)
+    })
+    $a.Add_Activated({
+        $src = Get-TbActivationSource
+        Write-HudLog ("barra: activada -> {0} (clic hace {1} ms)" -f $src, [AtalayaTaskbar]::MsSinceClick())
+        if ($src -eq "otra") { Restore-TbForeground; return }
+        $script:TbPending = $src
+        $script:TbActTimer.Stop(); $script:TbActTimer.Start()
+    })
+    $a.Add_StateChanged({
+        if ($script:TbAnchor -and $script:TbAnchor.WindowState -ne "Normal") { $script:TbAnchor.WindowState = "Normal" }
+    })
+    $a.Add_Closing({
+        param($src, $e)
+        # Solo nosotros la cerramos (Set-TaskbarMode); cualquier otro cierre
+        # pasa por SC_CLOSE y ya se convierte en "quitar el modo".
+        if (-not $script:TbClosingByUs) { $e.Cancel = $true }
+    })
+    [AtalayaTaskbar]::StartClickWatch()
+    $script:TbAnchor = $a
+    $script:TbPinned = $false; $script:TbPinTries = 0; $script:TbKey = ""
+    $a.Show()
+    Update-TaskbarAnchor $script:LastSummary
+    Write-HudLog "barra: escritorios en la barra de tareas activados"
+}
+
+function Disable-TaskbarAnchor {
+    Close-TbPopup
+    if (-not $script:TbAnchor) { return }
+    $script:TbClosingByUs = $true
+    try { $script:TbAnchor.Close() } catch { }
+    $script:TbClosingByUs = $false
+    $script:TbAnchor = $null; $script:TbHwnd = [IntPtr]::Zero
+    Write-HudLog "barra: escritorios en la barra de tareas desactivados"
+}
+
+# Cambio desde la bandeja o la X: se aplica ya y se guarda en config.json
+# (pill.taskbar), la misma clave que la casilla de Ajustes.
+function Set-TaskbarMode([bool]$on) {
+    $script:TaskbarMode = $on
+    if ($on) { Enable-TaskbarAnchor } else { Disable-TaskbarAnchor }
+    $val = if ($on) { "true" } else { "false" }
+    Invoke-HubPost "/api/config" "{`"pill`":{`"taskbar`":$val}}"
+    Update-TrayMenuState
+}
+function Toggle-TaskbarMode { Set-TaskbarMode (-not $script:TaskbarMode) }
+
+# Cada tick: anclaje pendiente y quien tenia el foco (para devolverselo)
+function Watch-TaskbarAnchor {
+    if (-not $script:TbAnchor) { return }
+    Pin-TaskbarAnchor
+}
 
 # ---- Datos ------------------------------------------------------------------
 function Get-Summary {
@@ -606,6 +1238,7 @@ function Update-Hud {
         $window.ToolTip = "Atalaya: hub sin conexion (ejecuta atalaya.cmd)"
         $script:LastSummary = $null
         Update-TrayStatus $null
+        Update-TaskbarAnchor $null
         Update-Deck $null
         return
     }
@@ -739,6 +1372,7 @@ function Update-Hud {
         else { $null }
     $script:LastSummary = $s
     Update-TrayStatus $s
+    Update-TaskbarAnchor $s
     Update-Deck $s
     Set-CornerPosition
 }
@@ -1546,6 +2180,8 @@ $txtPomo.Add_MouseRightButtonDown({
 function Watch-Foreground {
     $fg = [AtalayaHotkey]::Foreground()
     if ($fg -eq 0 -or $fg -eq $script:PillHwnd -or $fg -eq $script:DeckHwnd) { return }
+    if ($fg -eq $script:TbHwnd.ToInt64() -or $fg -eq $script:TbPopupHwnd) { return }
+    $script:TbPrevFg = $fg
     if ($fg -ne [long]$script:LastFg) {
         $script:LastFg = $fg
         Invoke-HubPost "/api/foreground" ('{"hwnd":' + $fg + '}')
@@ -1687,10 +2323,9 @@ function Rescue-Pill {
 # via (hotkey, menu de la pildora).
 function Update-TrayMenuState {
     try {
-        if ($script:TrayPillToggle) {
-            $script:TrayPillToggle.Text = if ($script:PillHidden) { "Mostrar la pildora" } else { "Ocultar la pildora" }
-        }
+        if ($script:TrayPillToggle) { $script:TrayPillToggle.Checked = -not $script:PillHidden }
         if ($script:TrayCompact) { $script:TrayCompact.Checked = [bool]$script:PillCompact }
+        if ($script:TrayTaskbar) { $script:TrayTaskbar.Checked = [bool]$script:TaskbarMode }
     } catch { }
 }
 
@@ -1740,6 +2375,7 @@ function Update-TrayStatus($s) {
         if ($null -eq $s) {
             $script:Tray.Text = "Atalaya - hub sin conexion"
             $script:TrayStatus.Text = "Atalaya - hub sin conexion"
+            if ($script:TrayUrgent) { $script:TrayUrgent.Enabled = $false }
             return
         }
         $short = "Atalaya - $($s.needs_you)/$($s.working)/$($s.ready)"
@@ -1748,12 +2384,16 @@ function Update-TrayStatus($s) {
         $full = "$($s.needs_you) te necesitan - $($s.working) trabajando - $($s.ready) listas"
         if ($s.urgent) { $full += " | Atiende: $($s.urgent)" }
         $script:TrayStatus.Text = $full
+        if ($script:TrayUrgent) { $script:TrayUrgent.Enabled = [int]$s.needs_you -gt 0 }
         if ($script:TrayUpdate) {
             if ($s.update -and $s.update.available) {
                 $que = if ($s.update.tag) { [string]$s.update.tag } else { "la ultima version" }
                 $script:TrayUpdate.Text = "Actualizar Atalaya a $que"
+                # Que no quede escondida dentro del submenu
+                if ($script:TrayMaint) { $script:TrayMaint.Text = "Mantenimiento - hay actualizacion" }
             } else {
                 $script:TrayUpdate.Text = "Buscar actualizaciones"
+                if ($script:TrayMaint) { $script:TrayMaint.Text = "Mantenimiento" }
             }
         }
     } catch { }
@@ -1910,16 +2550,29 @@ $trayMenu = New-Object System.Windows.Forms.ContextMenuStrip
 # El gesto se escribe dentro del texto: ShortcutKeyDisplayString solo se pinta
 # si el item tiene ademas un ShortcutKeys valido, y los nuestros son hotkeys
 # globales registrados a mano, no atajos de menu.
-function Add-TrayItem([string]$text, [string]$gesture, [scriptblock]$onClick) {
+# $parent: $null = menu principal; si no, el submenu (ToolStripMenuItem).
+function Add-TrayItem([string]$text, [string]$gesture, [scriptblock]$onClick, $parent = $null) {
     $it = New-Object System.Windows.Forms.ToolStripMenuItem
     $it.Text = if ($gesture -and $gesture.Trim().ToLower() -ne "none") {
         "$text  ($gesture)"
     } else { $text }
     $it.Add_Click($onClick)
+    if ($parent) { [void]$parent.DropDownItems.Add($it) } else { [void]$trayMenu.Items.Add($it) }
+    return $it
+}
+function Add-TraySep($parent = $null) {
+    $sep = New-Object System.Windows.Forms.ToolStripSeparator
+    if ($parent) { [void]$parent.DropDownItems.Add($sep) } else { [void]$trayMenu.Items.Add($sep) }
+}
+function Add-TraySubmenu([string]$text) {
+    $it = New-Object System.Windows.Forms.ToolStripMenuItem
+    $it.Text = $text
     [void]$trayMenu.Items.Add($it)
     return $it
 }
-function Add-TraySep { [void]$trayMenu.Items.Add((New-Object System.Windows.Forms.ToolStripSeparator)) }
+
+# Orden por relevancia: arriba lo urgente y lo diario; en submenus lo
+# ocasional; abajo lo que casi nunca se toca.
 
 # Primera linea: resumen en vivo, no accionable (se refresca en cada tick).
 $script:TrayStatus = New-Object System.Windows.Forms.ToolStripMenuItem
@@ -1928,38 +2581,80 @@ $script:TrayStatus.Enabled = $false
 [void]$trayMenu.Items.Add($script:TrayStatus)
 Add-TraySep
 
+# Se habilita solo cuando alguien espera (ver Update-TrayStatus)
+$script:TrayUrgent = Add-TrayItem "Ir a la sesion que te necesita" $Hotkeys.jumpUrgent { Jump-Urgent }
+$script:TrayUrgent.Enabled = $false
 $null = Add-TrayItem "Abrir el panel" $Hotkeys.togglePanel { Open-Panel }
-$null = Add-TrayItem "Abrir el panel en maximo foco" "" { Open-PanelMax }
-Add-TraySep
-# El rescate va arriba y en negrita: es la razon principal por la que alguien
-# busca este menu.
+# El rescate va en negrita: es la razon principal por la que alguien busca
+# este menu.
 $miTrayHome = Add-TrayItem "Recentrar la pildora" $Hotkeys.recenterPill { Move-PillHome }
 try { $miTrayHome.Font = New-Object System.Drawing.Font($trayMenu.Font, [System.Drawing.FontStyle]::Bold) } catch { }
-$script:TrayPillToggle = Add-TrayItem "Ocultar la pildora" $Hotkeys.togglePill { Toggle-Pill }
-$null = Add-TrayItem "Ocultar la pildora 15 minutos" "" { Hide-PillFor 15 }
-$script:TrayCompact = Add-TrayItem "Pildora compacta" $Hotkeys.compactPill { Toggle-PillCompact }
-$null = Add-TrayItem "Anclar a todos los escritorios" "" { Pin-ToAllDesktops }
 Add-TraySep
-$null = Add-TrayItem "Ir a la sesion que te necesita" $Hotkeys.jumpUrgent { Jump-Urgent }
-$null = Add-TrayItem "Mostrar/ocultar el deck" $Hotkeys.toggleDeck {
+
+$smShow = Add-TraySubmenu "Mostrar"
+$script:TrayPillToggle = Add-TrayItem "Pildora" $Hotkeys.togglePill { Toggle-Pill } $smShow
+$script:TrayCompact = Add-TrayItem "Pildora compacta" $Hotkeys.compactPill { Toggle-PillCompact } $smShow
+$script:TrayTaskbar = Add-TrayItem "Escritorios en la barra de tareas" "" { Toggle-TaskbarMode } $smShow
+$null = Add-TrayItem "Ocultar la pildora 15 minutos" "" { Hide-PillFor 15 } $smShow
+Add-TraySep $smShow
+$null = Add-TrayItem "Deck (mostrar/ocultar)" $Hotkeys.toggleDeck {
     if ($script:PillHidden) { Show-Pill }
     if ($deck.IsVisible) { Hide-Deck } else { Show-Deck }
-}
-$null = Add-TrayItem "Renombrar el escritorio actual" $Hotkeys.renameDesktop { Rename-CurrentDesktop }
-$null = Add-TrayItem "Mover el escritorio a la izquierda" $Hotkeys.moveDeskPrev { Move-CurrentDesktop -1 }
-$null = Add-TrayItem "Mover el escritorio a la derecha" $Hotkeys.moveDeskNext { Move-CurrentDesktop 1 }
-$null = Add-TrayItem "Pomodoro: iniciar/pausar" $Hotkeys.pomodoro { Toggle-Pomodoro }
-$null = Add-TrayItem "Apartar la ventana activa" $Hotkeys.clearWindow { Invoke-ClearWindow }
+} $smShow
+$null = Add-TrayItem "Panel en maximo foco" "" { Open-PanelMax } $smShow
+
+$smDesk = Add-TraySubmenu "Escritorio"
+$null = Add-TrayItem "Renombrar el actual" $Hotkeys.renameDesktop { Rename-CurrentDesktop } $smDesk
+$null = Add-TrayItem "Mover a la izquierda" $Hotkeys.moveDeskPrev { Move-CurrentDesktop -1 } $smDesk
+$null = Add-TrayItem "Mover a la derecha" $Hotkeys.moveDeskNext { Move-CurrentDesktop 1 } $smDesk
+Add-TraySep $smDesk
+$null = Add-TrayItem "Anclar Atalaya a todos los escritorios" "" { Pin-ToAllDesktops } $smDesk
+
+$smTools = Add-TraySubmenu "Utilidades"
+$null = Add-TrayItem "Pomodoro: iniciar/pausar" $Hotkeys.pomodoro { Toggle-Pomodoro } $smTools
+$null = Add-TrayItem "Apartar la ventana activa" $Hotkeys.clearWindow { Invoke-ClearWindow } $smTools
 Add-TraySep
+
 $null = Add-TrayItem "Ajustes" "" { Open-PanelSettings }
+$smMaint = Add-TraySubmenu "Mantenimiento"
+$script:TrayMaint = $smMaint
 # El texto cambia solo cuando el hub detecta version nueva (ver Update-TrayStatus)
-$script:TrayUpdate = Add-TrayItem "Buscar actualizaciones" "" { Invoke-UpdateAction }
-$null = Add-TrayItem "Reiniciar el HUD" "" { Invoke-HubPost "/api/hud/restart" "{}" }
-Add-TraySep
-$null = Add-TrayItem "Cerrar el HUD (el hub sigue)" "" { $window.Close() }
+$script:TrayUpdate = Add-TrayItem "Buscar actualizaciones" "" { Invoke-UpdateAction } $smMaint
+$null = Add-TrayItem "Reiniciar el HUD" "" { Invoke-HubPost "/api/hud/restart" "{}" } $smMaint
+$null = Add-TrayItem "Cerrar el HUD (el hub sigue)" "" { $window.Close() } $smMaint
 $null = Add-TrayItem "Salir de Atalaya" "" { Exit-Atalaya }
 
 $script:Tray.ContextMenuStrip = $trayMenu
+
+# El menu de la bandeja es de WinForms y se cierra "solo" gracias a un filtro
+# de mensajes que necesita el bucle de WinForms (Application.Run). Aqui el
+# bucle es el de WPF, asi que no se cerraba al hacer clic fuera ni con Esc:
+# habia que elegir una accion. Mientras esta abierto se vigila a mano.
+function Test-PointerInMenu($strip) {
+    $pt = [System.Windows.Forms.Control]::MousePosition
+    if ($strip.Visible -and $strip.Bounds.Contains($pt)) { return $true }
+    foreach ($it in $strip.Items) {
+        if ($it -is [System.Windows.Forms.ToolStripMenuItem] -and $it.HasDropDownItems -and $it.DropDown.Visible) {
+            if (Test-PointerInMenu $it.DropDown) { return $true }
+        }
+    }
+    return $false
+}
+$script:TrayMenuWatch = New-Object System.Windows.Threading.DispatcherTimer
+$script:TrayMenuWatch.Interval = [TimeSpan]::FromMilliseconds(60)
+$script:TrayMenuWatch.Add_Tick({
+    if (-not $trayMenu.Visible) { $script:TrayMenuWatch.Stop(); return }
+    $esc = [AtalayaHotkey]::KeyDown(0x1B)
+    $click = [AtalayaHotkey]::KeyDown(0x01) -or [AtalayaHotkey]::KeyDown(0x02) -or [AtalayaHotkey]::KeyDown(0x04)
+    if ($esc -or ($click -and -not (Test-PointerInMenu $trayMenu))) {
+        $trayMenu.Close([System.Windows.Forms.ToolStripDropDownCloseReason]::AppClicked)
+    }
+})
+$trayMenu.Add_Opened({
+    # Descarta pulsaciones previas (el bit "desde la ultima consulta")
+    foreach ($vk in 0x01, 0x02, 0x04, 0x1B) { [void][AtalayaHotkey]::KeyDown($vk) }
+    $script:TrayMenuWatch.Start()
+})
 
 # Clic simple = rescatar la pildora; doble clic = abrir el panel. Quien va al
 # icono suele ir por una de esas dos cosas.
@@ -2049,6 +2744,7 @@ $timer.Add_Tick({
     Update-Hud
     Watch-Foreground
     Assert-Topmost
+    Watch-TaskbarAnchor
 })
 
 $window.Add_ContentRendered({
@@ -2070,6 +2766,7 @@ $window.Add_ContentRendered({
     }
     $timer.Start()
     Pin-ToAllDesktops
+    if ($script:TaskbarMode) { Enable-TaskbarAnchor }
     Register-Hotkeys
     Update-TrayMenuState
     if ($script:DeckPinned) {
@@ -2083,6 +2780,7 @@ $window.Add_ContentRendered({
 
 $window.Add_Closed({
     $timer.Stop()
+    Disable-TaskbarAnchor
     # Sin esto queda un icono fantasma en la bandeja hasta que el usuario pasa
     # el raton por encima.
     try {
