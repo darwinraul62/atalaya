@@ -123,8 +123,18 @@ try {
             & node --check $js.FullName 2>$null | Out-Null
             if ($LASTEXITCODE -ne 0) { $malos += "$($js.Name): error de sintaxis de JavaScript" }
         }
+        # PowerShell 5.1 lee un .ps1 sin BOM como ANSI: si lleva tildes (los
+        # textos del HUD las llevan) tiene que ir en UTF-8 CON BOM o la interfaz
+        # mostraria las tildes rotas (dos simbolos raros por letra).
+        foreach ($ps in Get-ChildItem $work -Recurse -Filter "*.ps1") {
+            $bytes = [System.IO.File]::ReadAllBytes($ps.FullName)
+            $bom = $bytes.Length -ge 3 -and $bytes[0] -eq 0xEF -and $bytes[1] -eq 0xBB -and $bytes[2] -eq 0xBF
+            if (-not $bom -and @($bytes | Where-Object { $_ -gt 0x7F } | Select-Object -First 1).Count) {
+                $malos += "$($ps.Name): tiene caracteres no ASCII y no lleva BOM UTF-8"
+            }
+        }
         if ($malos.Count) {
-            Write-Host "[x] Scripts con errores de sintaxis:"
+            Write-Host "[x] Scripts con errores de sintaxis o de codificacion:"
             $malos | ForEach-Object { Write-Host "    $_" }
             $ok = $false
         } else {

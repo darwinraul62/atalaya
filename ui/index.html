@@ -250,6 +250,7 @@
       <label>Recentrar la píldora <input data-hk="recenterPill" placeholder="Ctrl+Alt+H"></label>
       <label>Ocultar/mostrar la píldora <input data-hk="togglePill" placeholder="Ctrl+Alt+O"></label>
       <label>Píldora compacta/normal <input data-hk="compactPill" placeholder="Ctrl+Alt+K"></label>
+      <label>Modo reunión (ocultar nombres) <input data-hk="meetingMode" placeholder="Ctrl+Alt+M"></label>
       <label>Esquina de la píldora
         <select id="setCorner">
           <option value="">libre (recordar arrastre)</option>
@@ -284,6 +285,13 @@
           <option value="right">derecha</option>
         </select>
       </label>
+      <label>Escritorios en la barra acoplada
+        <select id="setDockAlign">
+          <option value="start">al inicio (izquierda / arriba)</option>
+          <option value="center">al centro</option>
+          <option value="end">al final (derecha / abajo)</option>
+        </select>
+      </label>
       <label>Monitor de la barra acoplada
         <select id="setDockMonitor">
           <option value="primary">el principal</option>
@@ -311,11 +319,18 @@
     <h4>Píldora y pomodoro</h4>
     <div class="set-checks">
       <label><input type="checkbox" id="setTaskbar"> Escritorios en la barra de tareas (botón de Atalaya con la lista al pasar el ratón; útil con la píldora oculta)</label>
-      <label><input type="checkbox" id="setPomoEnabled"> Pomodoro 🍅 visible en la píldora (controles en el deck)</label>
+      <label><input type="checkbox" id="setPomoEnabled"> Pomodoro 🍅 visible (en la píldora y en la barra acoplada; clic derecho sobre él = opciones)</label>
+      <label><input type="checkbox" id="setPomoSound"> Pomodoro: sonido al terminar cada fase</label>
+      <label><input type="checkbox" id="setDockMusic"> Controles de música en la barra acoplada (anterior, reproducir/pausa, siguiente)</label>
+      <label><input type="checkbox" id="setDockMusicTitle"> … con el título de lo que suena</label>
+      <label><input type="checkbox" id="setDockCounters"> Contadores de sesiones en la barra acoplada</label>
+      <label><input type="checkbox" id="setMeeting"> Modo reunión: ocultar nombres de escritorios, el pomodoro y el título de la canción (para compartir pantalla; también con 👁 en la barra)</label>
     </div>
     <div class="set-grid">
       <label>Pomodoro: minutos de foco <input id="setPomoWork" type="number" min="5" max="120" step="5" placeholder="25"></label>
       <label>Pomodoro: minutos de pausa <input id="setPomoBreak" type="number" min="1" max="60" placeholder="5"></label>
+      <label>Pomodoro: minutos de pausa larga <input id="setPomoLong" type="number" min="5" max="60" placeholder="15"></label>
+      <label>Pomodoro: pausa larga cada (pomodoros) <input id="setPomoEvery" type="number" min="2" max="8" placeholder="4"></label>
     </div>
     <h4>Actualizaciones</h4>
     <div class="set-checks">
@@ -857,6 +872,14 @@ settingsBtn.addEventListener("click", async () => {
     document.getElementById("setPomoEnabled").checked = !!(cfg.pomodoro && cfg.pomodoro.enabled);
     document.getElementById("setPomoWork").value = (cfg.pomodoro && cfg.pomodoro.workMin) || 25;
     document.getElementById("setPomoBreak").value = (cfg.pomodoro && cfg.pomodoro.breakMin) || 5;
+    document.getElementById("setPomoLong").value = (cfg.pomodoro && cfg.pomodoro.longMin) || 15;
+    document.getElementById("setPomoEvery").value = (cfg.pomodoro && cfg.pomodoro.every) || 4;
+    document.getElementById("setPomoSound").checked = !(cfg.pomodoro && cfg.pomodoro.sound === false);
+    document.getElementById("setDockMusic").checked = !!(cfg.bar && cfg.bar.music);
+    document.getElementById("setDockMusicTitle").checked = !(cfg.bar && cfg.bar.musicTitle === false);
+    document.getElementById("setDockCounters").checked = !(cfg.bar && cfg.bar.counters === false);
+    document.getElementById("setDockAlign").value = (cfg.bar && cfg.bar.align) || "start";
+    document.getElementById("setMeeting").checked = !!(cfg.privacy && cfg.privacy.meeting);
     // Sin la clave, el valor por defecto es comprobar (opt-out, no opt-in)
     document.getElementById("setUpdateCheck").checked = !(cfg.update && cfg.update.check === false);
     document.getElementById("setUpdateHours").value = (cfg.update && cfg.update.intervalHours) || 12;
@@ -886,11 +909,19 @@ document.getElementById("setSave").addEventListener("click", async () => {
   const bar = {
     dock: document.getElementById("setDock").value,
     monitor: document.getElementById("setDockMonitor").value,
+    music: document.getElementById("setDockMusic").checked,
+    musicTitle: document.getElementById("setDockMusicTitle").checked,
+    counters: document.getElementById("setDockCounters").checked,
+    align: document.getElementById("setDockAlign").value,
   };
+  const privacy = { meeting: document.getElementById("setMeeting").checked };
   const pomodoro = {
     enabled: document.getElementById("setPomoEnabled").checked,
     workMin: Number(document.getElementById("setPomoWork").value) || 25,
     breakMin: Number(document.getElementById("setPomoBreak").value) || 5,
+    longMin: Number(document.getElementById("setPomoLong").value) || 15,
+    every: Number(document.getElementById("setPomoEvery").value) || 4,
+    sound: document.getElementById("setPomoSound").checked,
   };
   const update = {
     check: document.getElementById("setUpdateCheck").checked,
@@ -898,7 +929,7 @@ document.getElementById("setSave").addEventListener("click", async () => {
   };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill, bar, deck, pomodoro, update });
+    const r = await postJson("/api/config", { hotkeys, pill, bar, privacy, deck, pomodoro, update });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";

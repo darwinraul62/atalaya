@@ -97,11 +97,12 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     uso, cada una con su atajo escrito al lado:
     - arriba lo diario: **ir a la sesión que te necesita** (en gris si nadie
       espera), **abrir el panel** y **recentrar la píldora**;
+    - los interruptores rápidos: **Modo reunión** y **Barra acoplada**
+      (qué muestra, dónde van los escritorios, borde y monitor);
     - en submenús lo ocasional: **Mostrar** (píldora, compacta, ocultar 15
-      min, escritorios en la barra de tareas, barra acoplada, deck, máximo
-      foco),
+      min, escritorios en la barra de tareas, deck, máximo foco),
       **Escritorio** (renombrar, mover, anclar) y **Utilidades** (pomodoro,
-      apartar ventana);
+      controles de música, apartar ventana);
     - abajo **Ajustes**, **Mantenimiento** (actualizar — el submenú lo avisa
       si hay versión nueva —, reiniciar o cerrar el HUD) y **Salir**.
 
@@ -138,8 +139,8 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   - Limitación de Windows: el botón aparece también en **Alt+Tab** (todo lo
     que lo saca de Alt+Tab lo saca también de la barra); elegirlo ahí no hace
     nada.
-- **Barra acoplada** (opcional; bandeja → *Mostrar* → *Barra acoplada*, o en
-  Ajustes): una franja fija pegada a un borde de la pantalla con un botón por
+- **Barra acoplada** (opcional; bandeja → *Barra acoplada*, o en Ajustes):
+  una franja fija pegada a un borde de la pantalla con un botón por
   escritorio. Windows la trata como la barra de tareas: **reserva su
   espacio**, así que las ventanas maximizadas no la tapan y ella no tapa nada.
   - **Borde**: arriba, abajo, izquierda o derecha. En los laterales es
@@ -147,9 +148,28 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     ratón.
   - **Monitor**: el principal (por defecto), todos (una barra en cada uno) o
     uno concreto (numerados de izquierda a derecha).
+  - **Escritorios** a la izquierda, al centro o a la derecha (arriba, centro
+    o abajo en vertical); el pomodoro, la música y los contadores se
+    reacomodan en el lado libre.
+  - **Contenido**: pomodoro, controles de música, título de la canción y
+    contadores se encienden y apagan desde el submenú *Barra acoplada*, que
+    no se cierra al marcarlos (para cambiar varios seguidos).
   - **Clic** en un escritorio = ir a él; en un contador = saltar a esa
     sesión; **☰** = panel. **Clic derecho** en un escritorio = renombrarlo
     ahí mismo (Enter guarda, Esc cancela); en el fondo = el menú de Atalaya.
+  - **Pomodoro**: bloque con el tiempo, una bolita por pomodoro de la serie
+    (●●○○) y botones ▶/⏸, saltar fase y reiniciar. El fondo se va llenando
+    con el color de la fase (🍅 foco coral, ☕ pausa verde azulado, 🌴 pausa
+    larga lila) y el borde dice el estado: casi invisible en pausa, tenue en
+    marcha, sólido y parpadeando cuando se acaba el tiempo.
+  - **Música** (`bar.music`): ⏮ ▶/⏸ ⏭ para el reproductor que Windows tenga
+    activo (Spotify, YouTube en el navegador…) y el título de lo que suena,
+    con ancho fijo para que los botones no se muevan al cambiar de canción.
+- **Modo reunión** (`Ctrl+Alt+M`, el ojo 👁 de la barra acoplada o la
+  bandeja): para compartir pantalla. Oculta los nombres de los escritorios
+  (píldora, barra, barra de tareas y deck; quedan los números), el pomodoro y
+  el título de la canción. El pomodoro sigue contando, sin sonido ni avisos
+  hasta salir del modo. Se recuerda entre reinicios.
   - En monitores con otra escala (p. ej. 175 %) la barra se ve algo borrosa:
     Windows la estira porque el HUD trabaja con una sola escala.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
@@ -178,11 +198,15 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     `Ctrl+Alt+U` la **aparta**: recorta la ventana activa por el borde que
     menos área le quite para que dejen de solaparse (si estaba maximizada, la
     restaura primero). También está en el menú de la píldora.
-  - **Pomodoro** 🍅 opcional y sutil dentro de la píldora: actívalo con el
-    tomate del deck o en Ajustes. Clic = iniciar/pausar (`Ctrl+Alt+P`), clic
-    derecho = reiniciar; en foco muestra 🍅 y en descanso ☕, con toast al
-    cambiar de fase. Los tiempos (foco/pausa) se ajustan desde el pie del
-    deck sin reiniciar nada.
+  - **Pomodoro** 🍅 opcional, en la píldora y en la barra acoplada:
+    actívalo en su menú, en el tomate del deck o en Ajustes. Por defecto los
+    tiempos de la técnica oficial: 25 min de foco, 5 de pausa y una pausa
+    larga de 15 cada 4 pomodoros. Clic = iniciar/pausar (`Ctrl+Alt+P`); clic
+    derecho = su menú (iniciar, saltar fase, reiniciar, tiempos 25/5/15,
+    50/10/30 o 15/3/10, sonido, mostrar). Al terminar una fase: aviso de
+    Windows, campanita opcional y el bloque parpadea hasta que lo tocas. Al
+    acabar el foco la pausa arranca sola; al acabar la pausa el siguiente
+    foco espera tu clic.
 - Cuando visitas la ventana de una sesión que estaba en 🔔/✓ (unos segundos
   bastan), la alerta se da por **leída**: la tarjeta pasa a `✓ Visto` y deja
   de contar como pendiente, hasta que esa sesión vuelva a hablar. (Antes las
@@ -267,6 +291,7 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+H` | Recentrar la píldora (si quedó fuera de vista o tras un cambio de monitor/resolución: va a su esquina fija, o abajo al centro) |
   | `Ctrl+Alt+O` | Ocultar/mostrar la píldora (Atalaya sigue en la bandeja) |
   | `Ctrl+Alt+K` | Píldora compacta (solo contadores) / tamaño normal |
+  | `Ctrl+Alt+M` | Modo reunión: ocultar/mostrar nombres, pomodoro y título de la canción |
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Mostrar/ocultar el deck |
 
@@ -561,7 +586,8 @@ etiqueta informativa heredada (opcional).
 - Estado central: `%USERPROFILE%\.atalaya\` (`sessions/`, `notes.json`,
   `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
   escritorio de cada sesión, `config.json` con los hotkeys y las preferencias
-  — secciones `hotkeys`, `pill`, `deck`, `pomodoro`, `update` —,
+  — secciones `hotkeys`, `pill`, `bar`, `privacy`, `deck`, `pomodoro`,
+  `update` —,
   `desknames.json` con los últimos nombres de escritorio que has usado (los
   que se ofrecen al renombrar), `update.json`
   con el resultado de la última consulta de versión, `hub.log`,

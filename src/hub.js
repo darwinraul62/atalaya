@@ -1231,6 +1231,17 @@ const server = http.createServer(async (req, res) => {
         const v = String(body.bar.monitor);
         cfg.bar.monitor = v === "all" || /^[1-9]$/.test(v) ? v : "primary";
       }
+      if (body.bar.music !== undefined) cfg.bar.music = !!body.bar.music;
+      if (body.bar.musicTitle !== undefined) cfg.bar.musicTitle = !!body.bar.musicTitle;
+      if (body.bar.counters !== undefined) cfg.bar.counters = !!body.bar.counters;
+      if (body.bar.align !== undefined) {
+        const v = String(body.bar.align);
+        cfg.bar.align = ["start", "center", "end"].includes(v) ? v : "start";
+      }
+    }
+    if (body.privacy && typeof body.privacy === "object") {
+      cfg.privacy = { ...cfg.privacy };
+      if (body.privacy.meeting !== undefined) cfg.privacy.meeting = !!body.privacy.meeting;
     }
     if (body.deck && typeof body.deck === "object") {
       cfg.deck = { ...cfg.deck };
@@ -1250,6 +1261,15 @@ const server = http.createServer(async (req, res) => {
         const n = Number(body.pomodoro.breakMin);
         cfg.pomodoro.breakMin = Number.isInteger(n) && n >= 1 && n <= 60 ? n : 5;
       }
+      if (body.pomodoro.longMin !== undefined) {
+        const n = Number(body.pomodoro.longMin);
+        cfg.pomodoro.longMin = Number.isInteger(n) && n >= 5 && n <= 60 ? n : 15;
+      }
+      if (body.pomodoro.every !== undefined) {
+        const n = Number(body.pomodoro.every);
+        cfg.pomodoro.every = Number.isInteger(n) && n >= 2 && n <= 8 ? n : 4;
+      }
+      if (body.pomodoro.sound !== undefined) cfg.pomodoro.sound = !!body.pomodoro.sound;
     }
     if (body.update && typeof body.update === "object") {
       cfg.update = { ...cfg.update };

@@ -8,7 +8,8 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 
 Los escritorios también se pueden manejar desde la barra de tareas o desde
 una barra acoplada a un borde, para quien prefiere no tener la píldora encima
-de su trabajo.
+de su trabajo. La barra acoplada trae además pomodoro y controles de música,
+y un modo reunión oculta lo privado antes de compartir pantalla.
 
 ### Añadido
 - **Escritorios en la barra de tareas** (opcional: bandeja → *Mostrar*, o
@@ -45,8 +46,32 @@ de su trabajo.
   (`EnumDisplaySettings`) y la ventana se coloca dentro del área de trabajo
   que devuelve Windows; sin eso, en un monitor al 175 % la barra derecha
   quedaba a media pantalla.
+- **Pomodoro completo** en la barra acoplada y la píldora:
+  - tiempos de la técnica oficial por defecto (25/5 y pausa larga de 15 cada
+    4) y dos juegos más (50/10/30, 15/3/10); `pomodoro.longMin`, `every`;
+  - progreso de la fase como relleno de color, bolitas de la serie, botones
+    iniciar/pausar, saltar fase (un foco saltado no cuenta) y reiniciar;
+  - al terminar: aviso, campanita sintetizada (`pomodoro.sound`, sin
+    archivos de audio) y parpadeo hasta que lo tocas; la pausa arranca sola,
+    el siguiente foco espera tu clic;
+  - menú propio con clic derecho, también en la bandeja (*Utilidades*).
+- **Controles de música** en la barra acoplada (`bar.music`): anterior,
+  reproducir/pausa, siguiente y el título de lo que suena
+  (`bar.musicTitle`), leídos de la sesión de medios de Windows
+  (GlobalSystemMediaTransportControls); sin ella, teclas multimedia.
+- **Modo reunión** (`Ctrl+Alt+M`, ojo 👁 en la barra, bandeja o Ajustes;
+  `privacy.meeting`): oculta nombres de escritorios, pomodoro y título de la
+  canción; el pomodoro sigue contando sin sonido ni avisos.
+- **Posición de los escritorios** en la barra acoplada (`bar.align`:
+  inicio, centro o final) y contadores opcionales (`bar.counters`).
 
 ### Cambiado
+- **Tildes en la interfaz del HUD**: menús, tooltips y avisos decían
+  «pildora», «sesion», «musica»… `hud.ps1` pasa a UTF-8 con BOM (PowerShell
+  5.1 lee como ANSI los .ps1 sin BOM); el HUD avisa en el log si lo pierde y
+  `check-package` rechaza un .ps1 con tildes sin BOM.
+- **Barra acoplada y modo reunión** suben al primer nivel del menú de la
+  bandeja; los interruptores de contenido no cierran el menú.
 - **Un solo menú contextual**: el clic derecho en la píldora abría un menú
   propio, antiguo y desordenado; ahora es el mismo de la bandeja y de la
   barra acoplada.

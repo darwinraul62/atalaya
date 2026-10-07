@@ -1,4 +1,4 @@
-# Atalaya - HUD flotante: pastilla siempre visible con el resumen de sesiones.
+﻿# Atalaya - HUD flotante: pastilla siempre visible con el resumen de sesiones.
 # - Topmost (reafirmado cada tick), sin bordes, arrastrable; posicion en
 #   ~/.atalaya/hud.json; preferencias pill.* y pomodoro.* en config.json
 # - Opacidad segun estado (pill.dim); con el mouse encima SIEMPRE opaca
@@ -14,8 +14,10 @@
 # - Opcional (bar.dock/bar.monitor): barra acoplada a un borde (AppBar) en
 #   uno o en todos los monitores, otra alternativa que reserva su franja
 # Ejecutar con bin\Atalaya.exe --hud (o powershell.exe, que tambien es STA).
-# Solo caracteres ASCII en este archivo: PowerShell 5.1 no lee bien UTF-8 sin
-# BOM.
+# CODIFICACION: este archivo es UTF-8 CON BOM. PowerShell 5.1 lee un .ps1 sin
+# BOM como ANSI y los textos con tilde saldrian rotos ("pÃ­ldora"). Los
+# textos que ve el usuario llevan sus tildes; el codigo y los comentarios,
+# no. Si un editor quita el BOM, el arranque lo detecta y lo deja en el log.
 #
 # REGLA IMPORTANTE: NO registres manejadores de eventos con .GetNewClosure().
 # Hospedado en bin\Atalaya.exe esos manejadores NO se ejecutan, y falla en
@@ -193,6 +195,7 @@ $Hotkeys = @{
     recenterPill = "Ctrl+Alt+H"
     togglePill  = "Ctrl+Alt+O"
     compactPill = "Ctrl+Alt+K"
+    meetingMode = "Ctrl+Alt+M"
 }
 $PillCorner = ""
 $MaxPins = 0
@@ -207,6 +210,14 @@ $DockMonCfg = "primary" # en que monitor: "primary", "all" o "1".."9" (de izquie
 $PomoCfgEnabled = $false
 $PomoCfgWork = 25
 $PomoCfgBreak = 5
+$PomoCfgLong = 15     # pausa larga (tecnica oficial: 15-30 min)
+$PomoCfgEvery = 4     # cada cuantos pomodoros toca la pausa larga
+$PomoCfgSound = $true
+$MusicCfg = $false    # controles de musica en la barra acoplada (bar.music)
+$MusicTitleCfg = $true  # titulo de la cancion junto a los controles (bar.musicTitle)
+$DockCountersCfg = $true # contadores en la barra acoplada (bar.counters)
+$DockAlignCfg = "start"  # escritorios al inicio, centro o final (bar.align)
+$MeetingCfg = $false  # modo reunion: oculta nombres (privacy.meeting)
 try {
     $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
     foreach ($k in @($Hotkeys.Keys)) {
@@ -223,6 +234,14 @@ try {
     if ($cfg.pomodoro.enabled) { $PomoCfgEnabled = $true }
     if ($cfg.pomodoro.workMin) { $PomoCfgWork = [Math]::Min(120, [Math]::Max(5, [int]$cfg.pomodoro.workMin)) }
     if ($cfg.pomodoro.breakMin) { $PomoCfgBreak = [Math]::Min(60, [Math]::Max(1, [int]$cfg.pomodoro.breakMin)) }
+    if ($cfg.pomodoro.longMin) { $PomoCfgLong = [Math]::Min(60, [Math]::Max(5, [int]$cfg.pomodoro.longMin)) }
+    if ($cfg.pomodoro.every) { $PomoCfgEvery = [Math]::Min(8, [Math]::Max(2, [int]$cfg.pomodoro.every)) }
+    if ($null -ne $cfg.pomodoro.sound) { $PomoCfgSound = [bool]$cfg.pomodoro.sound }
+    if ($null -ne $cfg.bar.music) { $MusicCfg = [bool]$cfg.bar.music }
+    if ($null -ne $cfg.bar.musicTitle) { $MusicTitleCfg = [bool]$cfg.bar.musicTitle }
+    if ($null -ne $cfg.bar.counters) { $DockCountersCfg = [bool]$cfg.bar.counters }
+    if ($cfg.bar.align -in @("start", "center", "end")) { $DockAlignCfg = [string]$cfg.bar.align }
+    if ($null -ne $cfg.privacy.meeting) { $MeetingCfg = [bool]$cfg.privacy.meeting }
 } catch { }
 
 function ConvertTo-Hotkey([string]$spec) {
@@ -282,6 +301,10 @@ function Write-HudLog([string]$msg) {
     try { Add-Content -Path $LogFile -Value "$(Get-Date -Format o) hud: $msg" } catch { }
 }
 
+# "í" ocupa 1 caracter si el archivo se leyo como UTF-8 (con BOM) y 2 si se
+# leyo como ANSI: en ese caso todas las etiquetas con tilde saldrian rotas
+if ("í".Length -ne 1) { Write-HudLog "AVISO: hud.ps1 perdio el BOM UTF-8; las tildes de la interfaz se veran rotas" }
+
 # Glifos construidos por codepoint (evita problemas de codificacion del archivo)
 $GlyphBell  = [char]::ConvertFromUtf32(0x1F514)   # campana: te necesita
 $GlyphGear  = [char]::ConvertFromUtf32(0x2699)    # engrane: trabajando
@@ -294,6 +317,7 @@ $GlyphStar  = [char]::ConvertFromUtf32(0x2605)    # estrella: sesion pineada
 $GlyphDish  = [char]::ConvertFromUtf32(0x1F4E1)   # antena: abrir Atalaya (maximo foco)
 $GlyphTomato = [char]::ConvertFromUtf32(0x1F345)  # tomate: pomodoro en foco
 $GlyphCoffee = [char]::ConvertFromUtf32(0x2615)   # cafe: pomodoro en descanso
+$GlyphPalm   = [char]::ConvertFromUtf32(0x1F334)  # palmera: pomodoro en pausa larga
 $GlyphReset  = [char]::ConvertFromUtf32(0x1F504)  # flechas circulares: reiniciar pomodoro
 $GlyphUp     = [char]::ConvertFromUtf32(0x25B2)   # triangulo arriba: abrir el deck
 $GlyphDown   = [char]::ConvertFromUtf32(0x25BC)   # triangulo abajo: cerrar el deck
@@ -376,7 +400,7 @@ if ($Vertical) {
 # en el monitor donde el usuario la dejo)
 $btnPanel.Text = $GlyphDish
 $btnPanel.Cursor = "Hand"
-$btnPanel.ToolTip = "Abrir Atalaya en maximo foco (maximizada, donde la dejaste)"
+$btnPanel.ToolTip = "Abrir Atalaya en máximo foco (maximizada, donde la dejaste)"
 $btnPanel.Add_MouseLeftButtonDown({
     param($src, $e)
     $e.Handled = $true
@@ -402,7 +426,7 @@ foreach ($pairDef in @(
     @{ El = $txtReady; St = "ready";     Tip = "lista para revisar" })) {
     $pairDef.El.Cursor = "Hand"
     $pairDef.El.Tag = [string]$pairDef.St
-    $pairDef.El.ToolTip = "Ir a la sesion que mas tiempo lleva '$($pairDef.Tip)'"
+    $pairDef.El.ToolTip = "Ir a la sesión que más tiempo lleva '$($pairDef.Tip)'"
     $pairDef.El.Add_MouseLeftButtonDown({
         param($src, $e)
         $e.Handled = $true
@@ -794,13 +818,22 @@ function New-TbBadge([int]$count) {
     return $bmp
 }
 
+# Modo reunion (compartiendo pantalla): los nombres de escritorio no se
+# pintan en ningun sitio; quedan solo los numeros. Renombrar sigue usando el
+# nombre real.
+$script:Meeting = $MeetingCfg
+function Get-DeskLabel($d) {
+    if ($script:Meeting) { return "" }
+    return [string]$d.name
+}
+
 function Get-TbDesks($s) {
     if ($null -eq $s) { return @() }
     return @($s.deck | Where-Object { $null -ne $_.num })
 }
 
 function Get-TbHeadline($s) {
-    if ($null -eq $s) { return "Hub sin conexion" }
+    if ($null -eq $s) { return "Hub sin conexión" }
     return "$GlyphBell $($s.needs_you)    $GlyphGear $($s.working)    $GlyphCheck $($s.ready)"
 }
 
@@ -840,7 +873,7 @@ function Send-TbThumbnail([IntPtr]$hwnd, [int]$maxW, [int]$maxH) {
         }
         $col = if ($urgent) { $TbAttn } elseif ($busy) { $TbWork } else { $TbInk }
         $face = if ($isCur) { $tfb } else { $tf }
-        $ftN = New-Object Windows.Media.FormattedText("$($d.num + 1)  $($d.name)", $ci, "LeftToRight", $face, $fs, $col, 1.0)
+        $ftN = New-Object Windows.Media.FormattedText("$($d.num + 1)  $(Get-DeskLabel $d)", $ci, "LeftToRight", $face, $fs, $col, 1.0)
         $ftN.MaxTextWidth = [Math]::Max(10, $w - 80); $ftN.MaxLineCount = 1; $ftN.Trimming = "CharacterEllipsis"
         $dc.DrawText($ftN, [Windows.Point]::new(22, $ty))
         $st = @()
@@ -873,7 +906,7 @@ function Update-TaskbarAnchor($s) {
     if ($null -eq $s) {
         $script:TbAnchor.Title = ""
         $tbi.Overlay = $null; $tbi.ProgressState = "None"
-        $tbi.Description = "Atalaya: hub sin conexion"
+        $tbi.Description = "Atalaya: hub sin conexión"
         $script:TbSummary = $null; $script:TbKey = ""
         return
     }
@@ -895,8 +928,8 @@ function Update-TaskbarAnchor($s) {
         $bg = if ($urgent) { $TbAttn } elseif ($busy) { $TbWork } else { $TbCalm }
         $fg = if ($urgent) { $TbDark } else { $TbInk }
         $glyph = if ($urgent) { $GlyphBell } elseif ($busy) { $GlyphGear } else { "" }
-        $tip = "$($d.num + 1) $($d.name)"
-        if ($isCur)  { $tip = "$GlyphHere $tip (aqui)" }
+        $tip = "$($d.num + 1) $(Get-DeskLabel $d)"
+        if ($isCur)  { $tip = "$GlyphHere $tip (aquí)" }
         if ($urgent) { $tip += " - $GlyphBell $($d.needs_you) te necesita" }
         if ($busy)   { $tip += " - $GlyphGear $($d.working) trabajando" }
         $b = New-Object Windows.Shell.ThumbButtonInfo
@@ -1105,7 +1138,7 @@ function Show-TbPopup {
         $isCur = [bool]$d.current
         $urgent = [int]$d.needs_you -gt 0
         $busy = [int]$d.working -gt 0
-        $txt = "$($d.num + 1)  $($d.name)"
+        $txt = "$($d.num + 1)  $(Get-DeskLabel $d)"
         $txt = if ($isCur) { "$GlyphHere $txt" } else { "     $txt" }
         if ($urgent) { $txt += "   $GlyphBell $($d.needs_you)" }
         if ($busy)   { $txt += "   $GlyphGear $($d.working)" }
@@ -1328,6 +1361,8 @@ public static class AtalayaAppBar {
 $script:DockBars = New-Object System.Collections.ArrayList   # una entrada por monitor
 $script:DockEdge = ""
 $script:DockMonitor = "primary"
+$script:DockAlign = $DockAlignCfg
+$script:DockShowCounters = $DockCountersCfg
 $script:DockEditing = $false
 $script:DockRenamePopup = $null
 $script:DockClosingByUs = $false
@@ -1445,6 +1480,7 @@ function On-DockClick($src, $e) {
     if ($script:DockEditing) { return }
     $t = [string]$src.Tag
     if ($t -eq "panel") { Open-PanelMax }
+    elseif ($t -eq "meeting") { Set-MeetingMode (-not $script:Meeting) }
     elseif ($t -like "st:*") { Invoke-HubPost "/api/sessions/jump" ("{`"status`":`"" + $t.Substring(3) + "`"}") }
     else { Go-Desktop ([int]$t) }
 }
@@ -1520,7 +1556,7 @@ function Update-DockBar($s) {
         $desks = $bar.Desks; $tail = $bar.Tail
         $desks.Children.Clear(); $tail.Children.Clear()
         if ($null -eq $s) {
-            [void]$desks.Children.Add((New-DockText "Atalaya: hub sin conexion" $ColInk2 $false))
+            [void]$desks.Children.Add((New-DockText "Atalaya: hub sin conexión" $ColInk2 $false))
             continue
         }
         foreach ($d in (Get-TbDesks $s)) {
@@ -1533,7 +1569,7 @@ function Update-DockBar($s) {
                 $txt = [string]($d.num + 1)
                 if ($urgent) { $txt = "$GlyphBell$txt" } elseif ($busy) { $txt = "$GlyphGear$txt" } elseif ($isCur) { $txt = "$GlyphHere$txt" }
             } else {
-                $txt = "$($d.num + 1) $($d.name)"
+                $txt = "$($d.num + 1) $(Get-DeskLabel $d)"
                 if ($busy)   { $txt = "$GlyphGear $txt" }
                 if ($isCur)  { $txt = "$GlyphHere $txt" }
                 if ($urgent) { $txt = "$GlyphBell $txt" }
@@ -1541,7 +1577,7 @@ function Update-DockBar($s) {
             $fg = if ($urgent) { $ColAttn } elseif ($isCur) { $ColInk } elseif ($busy) { $ColWork } else { $ColInk2 }
             $bg = if ($urgent) { $BgUrgent } elseif ($isCur) { $BgRowCur } else { $BgRow }
             $br = if ($urgent) { $ColAttn } elseif ($isCur) { $ColChrome } else { $ColInk3 }
-            $tip = "$($d.num + 1) $($d.name)$(if ($isCur) { ' (aqui)' }): clic para ir - clic derecho para renombrarlo"
+            $tip = "$($d.num + 1) $(Get-DeskLabel $d)$(if ($isCur) { ' (aquí)' }): clic para ir - clic derecho para renombrarlo"
             if ($busy)   { $tip += " - $($d.working) trabajando" }
             if ($urgent) { $tip += " - $($d.needs_you) esperando tu respuesta" }
             $b = New-DockButton (New-DockText $txt $fg ($isCur -or $urgent)) $bg $br $tip ([string]$d.num)
@@ -1554,18 +1590,33 @@ function Update-DockBar($s) {
             [void]$desks.Children.Add($b)
         }
         $sp = if ($vertical) { "" } else { " " }
-        foreach ($c in @(
+        $counters = if ($script:DockShowCounters) { @(
             @{ T = "$GlyphBell$sp$($s.needs_you)"; N = [int]$s.needs_you; B = $ColAttn;   St = "needs_you"; Tip = "te necesita" },
             @{ T = "$GlyphGear$sp$($s.working)";   N = [int]$s.working;   B = $ColWork;   St = "working";   Tip = "trabajando" },
-            @{ T = "$GlyphCheck$sp$($s.ready)";    N = [int]$s.ready;     B = $DockReady; St = "ready";     Tip = "lista para revisar" })) {
+            @{ T = "$GlyphCheck$sp$($s.ready)";    N = [int]$s.ready;     B = $DockReady; St = "ready";     Tip = "lista para revisar" }) } else { @() }
+        foreach ($c in $counters) {
             $tb = New-DockText $c.T $c.B $true
             if ($c.N -eq 0) { $tb.Opacity = 0.45 }
-            $b = New-DockButton $tb $BgRow $BgRow "$($c.N) $($c.Tip) - clic: ir a la que mas tiempo lleva asi" ("st:" + $c.St)
+            $b = New-DockButton $tb $BgRow $BgRow "$($c.N) $($c.Tip) - clic: ir a la que más tiempo lleva así" ("st:" + $c.St)
             $b.Padding = if ($vertical) { "0,2" } else { "5,2" }
             $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
             [void]$tail.Children.Add($b)
         }
-        $b = New-DockButton (New-DockText $GlyphDish $ColInk2 $false) $BgRow $BgRow "Abrir Atalaya en maximo foco" "panel"
+        # Ojo: modo reunion de un clic (tachado y ambar mientras esta activo)
+        $eye = New-Object Windows.Controls.TextBlock
+        $eye.FontFamily = $IconFont; $eye.FontSize = 12; $eye.VerticalAlignment = "Center"; $eye.HorizontalAlignment = "Center"
+        if ($script:Meeting) {
+            $eye.Text = [string][char]0xED1A; $eye.Foreground = $ColAttn
+            $eyeTip = "Modo reunión ACTIVO: nombres de escritorio, pomodoro y título de la canción ocultos. Clic para mostrarlos ($($Hotkeys.meetingMode))"
+        } else {
+            $eye.Text = [string][char]0xE890; $eye.Foreground = $ColInk3
+            $eyeTip = "Modo reunión: oculta nombres de escritorio, pomodoro y título de la canción para compartir pantalla ($($Hotkeys.meetingMode))"
+        }
+        $b = New-DockButton $eye $BgRow $(if ($script:Meeting) { $ColAttn } else { $BgRow }) $eyeTip "meeting"
+        $b.Padding = if ($vertical) { "0,3" } else { "6,3" }
+        $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
+        [void]$tail.Children.Add($b)
+        $b = New-DockButton (New-DockText $GlyphDish $ColInk2 $false) $BgRow $BgRow "Abrir Atalaya en máximo foco" "panel"
         $b.Padding = if ($vertical) { "0,2" } else { "5,2" }
         $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
         [void]$tail.Children.Add($b)
@@ -1580,24 +1631,52 @@ function New-DockWindow($screen) {
     $w.ShowInTaskbar = $false; $w.ShowActivated = $false; $w.Topmost = $true
     $w.Background = $DockBg
     $w.Width = 400; $w.Height = $DockThick; $w.Left = -32000; $w.Top = -32000
-    # Escritorios al principio; contadores y antena al final (derecha o abajo)
-    $dp = New-Object Windows.Controls.DockPanel
-    $dp.LastChildFill = $true
+    # Tres zonas (inicio | centro | final; en vertical arriba | centro | abajo).
+    # bar.align decide donde van los escritorios y el resto se reacomoda:
+    #   start : [escritorios] .................. [pomodoro musica][contadores]
+    #   center: [pomodoro musica] ...[escritorios]... [contadores]
+    #   end   : [pomodoro musica] .................. [escritorios][contadores]
+    $grid = New-Object Windows.Controls.Grid
+    $grid.Margin = if ($vertical) { "3,6,3,6" } else { "6,0,6,0" }
+    $zones = @()
+    foreach ($i in 0, 1, 2) {
+        $len = if ($i -eq 1) { [Windows.GridLength]::Auto } else { New-Object Windows.GridLength -ArgumentList 1, ([Windows.GridUnitType]::Star) }
+        $z = New-Object Windows.Controls.StackPanel
+        if ($vertical) {
+            $rd = New-Object Windows.Controls.RowDefinition; $rd.Height = $len
+            $grid.RowDefinitions.Add($rd)
+            [Windows.Controls.Grid]::SetRow($z, $i)
+            $z.Orientation = "Vertical"; $z.VerticalAlignment = @("Top", "Center", "Bottom")[$i]
+        } else {
+            $cd = New-Object Windows.Controls.ColumnDefinition; $cd.Width = $len
+            $grid.ColumnDefinitions.Add($cd)
+            [Windows.Controls.Grid]::SetColumn($z, $i)
+            $z.Orientation = "Horizontal"; $z.VerticalAlignment = "Center"
+            $z.HorizontalAlignment = @("Left", "Center", "Right")[$i]
+        }
+        [void]$grid.Children.Add($z)
+        $zones += $z
+    }
     $tail = New-Object Windows.Controls.WrapPanel
     $desks = New-Object Windows.Controls.StackPanel
+    $extras = New-Object Windows.Controls.StackPanel
     if ($vertical) {
-        $dp.Margin = "3,6,3,6"
-        [Windows.Controls.DockPanel]::SetDock($tail, "Bottom")
+        $extras.Orientation = "Vertical"
         $tail.HorizontalAlignment = "Center"; $tail.Orientation = "Vertical"
         $desks.Orientation = "Vertical"
     } else {
-        $dp.Margin = "6,0,6,0"
-        [Windows.Controls.DockPanel]::SetDock($tail, "Right")
+        $extras.Orientation = "Horizontal"; $extras.VerticalAlignment = "Center"
         $tail.VerticalAlignment = "Center"
         $desks.Orientation = "Horizontal"; $desks.VerticalAlignment = "Center"
     }
-    [void]$dp.Children.Add($tail); [void]$dp.Children.Add($desks)
-    $w.Content = $dp
+    $gap = if ($vertical) { "0,0,0,8" } else { "0,0,10,0" }
+    switch ($script:DockAlign) {
+        "center" { $desks.Margin = $gap; $zone = @(@($extras), @($desks), @($tail)) }
+        "end"    { $desks.Margin = $gap; $zone = @(@($extras), @(), @($desks, $tail)) }
+        default  { $zone = @(@($desks), @(), @($extras, $tail)) }
+    }
+    foreach ($i in 0, 1, 2) { foreach ($el in $zone[$i]) { [void]$zones[$i].Children.Add($el) } }
+    $w.Content = $grid
     # Clic derecho en el fondo = el menu completo de la bandeja
     $w.Add_MouseRightButtonUp({ param($src, $e) $trayMenu.Show([System.Windows.Forms.Control]::MousePosition) })
     $w.Add_Closing({ param($src, $e) if (-not $script:DockClosingByUs) { $e.Cancel = $true } })
@@ -1606,8 +1685,9 @@ function New-DockWindow($screen) {
     ([Windows.Interop.HwndSource]::FromHwnd($hwnd)).AddHook($script:DockHook)
     $bar = [PSCustomObject]@{
         Win = $w; Hwnd = $hwnd.ToInt64(); Screen = $screen; Registered = $false
-        Key = ""; Desks = $desks; Tail = $tail; Rect = ""
+        Key = ""; Desks = $desks; Tail = $tail; Rect = ""; X = $null
     }
+    try { $bar.X = New-DockExtras $extras } catch { Write-HudLog "barra acoplada: pomodoro/musica: $_" }
     $bar.Registered = [AtalayaAppBar]::Register($hwnd)
     if (-not $bar.Registered) { Write-HudLog "barra acoplada: Windows no acepto el registro en $($screen.DeviceName)" }
     [void]$script:DockBars.Add($bar)
@@ -1623,6 +1703,7 @@ function Enable-DockBar {
         try { New-DockWindow $scr } catch { Write-HudLog "barra acoplada: $($scr.DeviceName): $_" }
     }
     Update-DockBar $script:LastSummary
+    Update-DockExtras
 }
 
 function Disable-DockBar {
@@ -1657,10 +1738,63 @@ function On-DockMenuMonitor($sender, $e) {
     $edge = if ($script:DockEdge) { $script:DockEdge } else { "top" }
     Set-DockMode $edge ([string]$sender.Tag)
 }
+function Add-DockToggle($items, [string]$text, [string]$tag, [bool]$on, [bool]$enabled = $true) {
+    $it = New-Object System.Windows.Forms.ToolStripMenuItem
+    $it.Text = $text; $it.Tag = $tag; $it.Checked = $on; $it.Enabled = $enabled
+    $it.Add_Click({ param($sender, $e) On-DockToggle $sender $e })
+    [void]$items.Add($it)
+}
+# Interruptores de contenido: se aplican al momento y el menu sigue abierto
+# (ver el Closing de $script:TrayDock) para marcar varios seguidos.
+function On-DockToggle($sender, $e) {
+    $script:DockKeepOpen = $true
+    switch ([string]$sender.Tag) {
+        "pomo"     { Set-PomoEnabled (-not $script:PomoEnabled); $sender.Checked = $script:PomoEnabled }
+        "music"    { Set-MusicEnabled (-not $script:MusicEnabled); $sender.Checked = $script:MusicEnabled }
+        "title"    { Set-DockContent "musicTitle" (-not $script:MusicShowTitle); $sender.Checked = $script:MusicShowTitle }
+        "counters" { Set-DockContent "counters" (-not $script:DockShowCounters); $sender.Checked = $script:DockShowCounters }
+        "meeting"  { Set-MeetingMode (-not $script:Meeting); $sender.Checked = $script:Meeting }
+    }
+}
+function Set-DockContent([string]$key, [bool]$v) {
+    switch ($key) {
+        "musicTitle" { $script:MusicShowTitle = $v }
+        "counters"   { $script:DockShowCounters = $v }
+    }
+    Invoke-HubPost "/api/config" ('{"bar":{"' + $key + '":' + $(if ($v) { "true" } else { "false" }) + '}}')
+    foreach ($b in $script:DockBars) { $b.Key = "" }
+    Update-DockBar $script:LastSummary
+    Update-DockExtras
+}
+function Set-DockAlign([string]$align) {
+    if ($align -notin @("start", "center", "end")) { $align = "start" }
+    $script:DockAlign = $align
+    Invoke-HubPost "/api/config" "{`"bar`":{`"align`":`"$align`"}}"
+    if ($script:DockBars.Count) { Disable-DockBar; Enable-DockBar }
+}
+function On-DockMenuAlign($sender, $e) { Set-DockAlign ([string]$sender.Tag) }
 function Update-DockMenu {
     if (-not $script:TrayDock) { return }
     $items = $script:TrayDock.DropDownItems
     $items.Clear()
+    $on = [bool]$script:DockEdge
+    Add-DockToggle $items "Modo reunión (ocultar nombres)  ($($Hotkeys.meetingMode))" "meeting" $script:Meeting
+    [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    Add-DockToggle $items "Pomodoro" "pomo" $script:PomoEnabled $on
+    Add-DockToggle $items "Controles de música" "music" $script:MusicEnabled $on
+    Add-DockToggle $items "    Título de la canción" "title" $script:MusicShowTitle ($on -and $script:MusicEnabled)
+    Add-DockToggle $items "Contadores de sesiones" "counters" $script:DockShowCounters $on
+    [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    $v = Test-DockVertical
+    foreach ($o in @(@("start", $(if ($v) { "Escritorios arriba" } else { "Escritorios a la izquierda" })),
+                     @("center", "Escritorios al centro"),
+                     @("end", $(if ($v) { "Escritorios abajo" } else { "Escritorios a la derecha" })))) {
+        $it = New-Object System.Windows.Forms.ToolStripMenuItem
+        $it.Text = $o[1]; $it.Tag = $o[0]; $it.Checked = $script:DockAlign -eq $o[0]; $it.Enabled = $on
+        $it.Add_Click({ param($sender, $e) On-DockMenuAlign $sender $e })
+        [void]$items.Add($it)
+    }
+    [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
     foreach ($o in @(@("", "No"), @("top", "Arriba"), @("bottom", "Abajo"), @("left", "Izquierda"), @("right", "Derecha"))) {
         $it = New-Object System.Windows.Forms.ToolStripMenuItem
         $it.Text = $o[1]; $it.Tag = $o[0]; $it.Checked = $script:DockEdge -eq $o[0]
@@ -1721,7 +1855,7 @@ function Update-Hud {
         $pill.Background = $BgCalm; $pill.BorderBrush = $BrCalm
         $script:BaseOpacity = 0.55
         Set-PillOpacity
-        $window.ToolTip = "Atalaya: hub sin conexion (ejecuta atalaya.cmd)"
+        $window.ToolTip = "Atalaya: hub sin conexión (ejecuta atalaya.cmd)"
         $script:LastSummary = $null
         Update-TrayStatus $null
         Update-TaskbarAnchor $null
@@ -1769,7 +1903,7 @@ function Update-Hud {
             $b.BorderThickness = 1
             $b.Background  = if ($urgent) { $BgUrgent } elseif ($isCur) { $BgRowCur } else { $BgRow }
             $b.BorderBrush = if ($urgent) { $ColAttn } elseif ($isCur) { $ColChrome } else { $ColInk3 }
-            $shortName = [string]$d.name
+            $shortName = Get-DeskLabel $d
             if ($shortName.Length -gt 9) { $shortName = $shortName.Substring(0, 8) + "~" }
             $txt = "$($d.num + 1) $shortName"
             # Glifos de estado del escritorio: engrane = trabajo en progreso,
@@ -1784,7 +1918,7 @@ function Update-Hud {
                 elseif ($busy) { $ColWork } else { $ColInk2 }
             if ($isCur -or $urgent) { $tb.FontWeight = "SemiBold" }
             $b.Child = $tb
-            $tip = "$($d.name): clic para ir - clic derecho para renombrarlo"
+            $tip = "$(Get-DeskLabel $d): clic para ir - clic derecho para renombrarlo"
             if ($busy) { $tip += " - $($d.working) trabajando" }
             if ($urgent) { $tip += " - $($d.needs_you) esperando tu respuesta" }
             $b.ToolTip = $tip
@@ -1829,7 +1963,7 @@ function Update-Hud {
             $tb.FontFamily = New-Object Windows.Media.FontFamily("Segoe UI Emoji, Segoe UI")
             $tb.Foreground = if ($urgent) { $ColAttn } else { $ColInk2 }
             $b.Child = $tb
-            $b.ToolTip = "$($p.label): ir a esta sesion favorita"
+            $b.ToolTip = "$($p.label): ir a esta sesión favorita"
             $b.Tag = [string]$p.sessionId
             $b.Add_MouseLeftButtonDown({
                 param($src, $e)
@@ -1855,7 +1989,7 @@ function Update-Hud {
     Set-PillOpacity
 
     $window.ToolTip = if ($s.urgent) { "Atiende: $($s.urgent)" }
-        elseif ($script:PillCompact) { "Atalaya (compacta): doble clic abre el panel - clic derecho para volver al tamano normal ($($Hotkeys.compactPill))" }
+        elseif ($script:PillCompact) { "Atalaya (compacta): doble clic abre el panel - clic derecho para volver al tamaño normal ($($Hotkeys.compactPill))" }
         else { $null }
     $script:LastSummary = $s
     Update-TrayStatus $s
@@ -2155,12 +2289,12 @@ function Set-DeckView([string]$v) {
 
 # Pie del deck: controles del pomodoro (solo si esta activado)
 function Add-DeckFooter {
-    if (-not $script:PomoEnabled) { return }
+    if (-not $script:PomoEnabled -or $script:Meeting) { return }
     [void]$deckStack.Children.Add((New-DeckSep))
     $foot = New-Object Windows.Controls.StackPanel
     $foot.Orientation = "Horizontal"
     $foot.Margin = "2,0,2,1"
-    $g = if ($script:PomoPhase -eq "work") { $GlyphTomato } else { $GlyphCoffee }
+    $g = Get-PomoGlyph
     $time = New-DeckText "$g $(Format-PomoTime)" $ColPomo 12.5 0 $true
     $time.Opacity = if ($script:PomoRunning) { 1.0 } else { 0.6 }
     $script:PomoDeckText = $time
@@ -2179,7 +2313,7 @@ function Add-DeckFooter {
     [void]$foot.Children.Add($btnWm)
     $valW = New-DeckText "$($script:PomoWork)m" $ColInk2 11.5 0 $true; $valW.Margin = "4,0,4,0"
     [void]$foot.Children.Add($valW)
-    $btnWp = New-DeckBtn "+" $ColInk3 12.5 "5 min mas de foco" { Set-PomoTimes ($script:PomoWork + 5) $script:PomoBreak } $true
+    $btnWp = New-DeckBtn "+" $ColInk3 12.5 "5 min más de foco" { Set-PomoTimes ($script:PomoWork + 5) $script:PomoBreak } $true
     [void]$foot.Children.Add($btnWp)
     $lblB = New-DeckText "pausa" $ColInk3 10.5 0 $false; $lblB.Margin = "12,0,5,0"
     [void]$foot.Children.Add($lblB)
@@ -2187,7 +2321,7 @@ function Add-DeckFooter {
     [void]$foot.Children.Add($btnBm)
     $valB = New-DeckText "$($script:PomoBreak)m" $ColInk2 11.5 0 $true; $valB.Margin = "4,0,4,0"
     [void]$foot.Children.Add($valB)
-    $btnBp = New-DeckBtn "+" $ColInk3 12.5 "1 min mas de pausa" { Set-PomoTimes $script:PomoWork ($script:PomoBreak + 1) } $true
+    $btnBp = New-DeckBtn "+" $ColInk3 12.5 "1 min más de pausa" { Set-PomoTimes $script:PomoWork ($script:PomoBreak + 1) } $true
     [void]$foot.Children.Add($btnBp)
     [void]$deckStack.Children.Add($foot)
 }
@@ -2217,7 +2351,7 @@ function Update-Deck($s) {
         "Vista de importantes (favoritos: $($Hotkeys.pinSession) en la ventana o estrella del panel)" { Set-DeckView "pins" } $onPins
     $swPins.Margin = "7,0,0,0"
     $swHelp = New-DeckBtn "[?]" $(if ($onHelp) { $ColChrome } else { $ColInk3 }) 11 `
-        "Ayuda rapida: atajos de teclado y gestos" { Set-DeckView "help" } $onHelp
+        "Ayuda rápida: atajos de teclado y gestos" { Set-DeckView "help" } $onHelp
     $swHelp.Margin = "7,0,0,0"
 
     $pinText = if ($script:DeckPinned) { "$GlyphPin fijado" } else { "$GlyphPin fijar" }
@@ -2231,7 +2365,7 @@ function Update-Deck($s) {
     $navNew = New-DeckBtn "+" $ColInk3 12.5 "Crear un escritorio nuevo e ir a el" { New-VirtualDesktop } $true
     $navNew.Margin = "12,0,0,0"
     $pomoBtn = New-DeckBtn ([string]$GlyphTomato) $(if ($script:PomoEnabled) { $ColPomo } else { $ColInk3 }) 11 `
-        "Pomodoro: mostrar u ocultar en la pildora ($($Hotkeys.pomodoro) inicia/pausa)" { Set-PomoEnabled (-not $script:PomoEnabled) } $false
+        "Pomodoro: mostrar u ocultar en la píldora ($($Hotkeys.pomodoro) inicia/pausa)" { Set-PomoEnabled (-not $script:PomoEnabled) } $false
     $pomoBtn.Margin = "14,0,0,0"
     if (-not $script:PomoEnabled) { $pomoBtn.Opacity = 0.55 }
 
@@ -2256,7 +2390,7 @@ function Update-Deck($s) {
         # Ayuda rapida: hotkeys activos + gestos de mouse
         $helpKeys = @(
             @{ K = $Hotkeys.togglePanel; D = "Mostrar/ocultar el panel (modo quake)" },
-            @{ K = $Hotkeys.jumpUrgent;  D = "Ir a la sesion mas urgente" },
+            @{ K = $Hotkeys.jumpUrgent;  D = "Ir a la sesión más urgente" },
             @{ K = $Hotkeys.prevDesktop; D = "Escritorio anterior (con vuelta)" },
             @{ K = $Hotkeys.nextDesktop; D = "Escritorio siguiente (con vuelta)" },
             @{ K = $Hotkeys.newDesktop;  D = "Crear escritorio nuevo e ir a el" },
@@ -2265,11 +2399,11 @@ function Update-Deck($s) {
             @{ K = $Hotkeys.moveDeskNext; D = "Mover el escritorio actual a la derecha" },
             @{ K = $Hotkeys.toggleDeck;  D = "Mostrar/ocultar este deck" },
             @{ K = $Hotkeys.pinSession;  D = "Favorito: fijar/quitar la ventana activa" },
-            @{ K = $Hotkeys.clearWindow; D = "Apartar la ventana activa de la pildora" },
+            @{ K = $Hotkeys.clearWindow; D = "Apartar la ventana activa de la píldora" },
             @{ K = $Hotkeys.pomodoro;    D = "Pomodoro: iniciar o pausar" },
-            @{ K = $Hotkeys.recenterPill; D = "Recentrar la pildora (si quedo fuera de vista)" },
-            @{ K = $Hotkeys.togglePill;   D = "Ocultar/mostrar la pildora (sigue en la bandeja)" },
-            @{ K = $Hotkeys.compactPill;  D = "Pildora compacta (solo contadores) / normal" }
+            @{ K = $Hotkeys.recenterPill; D = "Recentrar la píldora (si quedó fuera de vista)" },
+            @{ K = $Hotkeys.togglePill;   D = "Ocultar/mostrar la píldora (sigue en la bandeja)" },
+            @{ K = $Hotkeys.compactPill;  D = "Píldora compacta (solo contadores) / normal" }
         )
         foreach ($hk in $helpKeys) {
             if (-not $hk.K -or $hk.K.Trim().ToLower() -eq "none") { continue }
@@ -2282,15 +2416,15 @@ function Update-Deck($s) {
         [void]$deckStack.Children.Add((New-DeckSep))
         $gestures = @(
             @{ K = "clic triangulo";      D = "abrir/cerrar este deck" },
-            @{ K = "doble clic pildora";  D = "abrir el panel completo" },
-            @{ K = "arrastrar pildora";   D = "moverla (con esquina fija vuelve sola)" },
-            @{ K = "clic contador";       D = "ir a la sesion mas antigua en ese estado" },
-            @{ K = "clic boton escritorio"; D = "cambiar a ese escritorio" },
-            @{ K = "clic der. boton esc."; D = "renombrar ESE escritorio desde la pildora" },
+            @{ K = "doble clic píldora";  D = "abrir el panel completo" },
+            @{ K = "arrastrar píldora";   D = "moverla (con esquina fija vuelve sola)" },
+            @{ K = "clic contador";       D = "ir a la sesión más antigua en ese estado" },
+            @{ K = "clic botón escritorio"; D = "cambiar a ese escritorio" },
+            @{ K = "clic der. botón esc."; D = "renombrar ESE escritorio desde la píldora" },
             @{ K = "$GlyphPencil de la fila"; D = "renombrar (Tab completa con nombres ya usados)" },
             @{ K = "$GlyphUp$GlyphDown de la fila"; D = "reordenar: subir o bajar ese escritorio" },
             @{ K = "clic derecho fila";   D = "renombrar escritorio / quitar favorito" },
-            @{ K = "clic derecho pildora"; D = "menu de acciones" }
+            @{ K = "clic derecho píldora"; D = "menú de acciones" }
         )
         foreach ($ge in $gestures) {
             $line = New-Object Windows.Controls.StackPanel
@@ -2304,7 +2438,7 @@ function Update-Deck($s) {
     }
 
     if (-not $s) {
-        [void]$deckStack.Children.Add((New-DeckText "hub sin conexion (ejecuta atalaya.cmd)" $ColInk3 11.5 0 $false))
+        [void]$deckStack.Children.Add((New-DeckText "hub sin conexión (ejecuta atalaya.cmd)" $ColInk3 11.5 0 $false))
         Add-DeckFooter
         return
     }
@@ -2333,7 +2467,7 @@ function Update-Deck($s) {
             $deskText = if ($p.desktopName) { [string]$p.desktopName } else { "" }
             [void]$line.Children.Add((New-DeckText $deskText $ColInk3 11 60 $false))
             $row.Child = $line
-            $row.ToolTip = "Clic: ir a esta sesion - Clic derecho: quitar de importantes"
+            $row.ToolTip = "Clic: ir a esta sesión - Clic derecho: quitar de importantes"
             $row.Tag = [string]$p.sessionId
             $row.Add_MouseLeftButtonUp({
                 param($src, $e)
@@ -2366,7 +2500,7 @@ function Update-Deck($s) {
         $line.Orientation = "Horizontal"
 
         $mark = if ($isCur) { "$GlyphHere " } else { "  " }
-        [void]$line.Children.Add((New-DeckText "$mark$($d.name)" $(if ($isCur) { $ColInk } else { $ColInk2 }) 12.5 128 $isCur))
+        [void]$line.Children.Add((New-DeckText "$mark$(Get-DeskLabel $d)" $(if ($isCur) { $ColInk } else { $ColInk2 }) 12.5 128 $isCur))
 
         $glyphs = ""
         if ([int]$d.needs_you -gt 0) { $glyphs += "$GlyphBell$($d.needs_you) " }
@@ -2431,7 +2565,7 @@ function Update-Deck($s) {
             $script:DeckRows[$num] = @{ Row = $row; Data = $dd }
         } else {
             $row.Child = $line
-            $row.ToolTip = "Sesiones aun sin escritorio detectado (enviales un prompt)"
+            $row.ToolTip = "Sesiones aún sin escritorio detectado (envíales un prompt)"
             $row.Cursor = "Arrow"
         }
         [void]$deckStack.Children.Add($row)
@@ -2542,46 +2676,220 @@ $deck.Add_MouseLeave({
     if ($script:DeckPinned) { $deck.Opacity = 0.5 } else { $script:DeckHideTimer.Start() }
 })
 
-# ---- Pomodoro: temporizador sutil en la pildora ------------------------------
-# Preferencia pomodoro.enabled en config.json (tambien conmutable con el boton
-# de tomate del deck, sin reiniciar). Fases: foco (tomate) / pausa (cafe).
-# Los cambios hechos desde el deck se persisten via el hub sin reiniciar HUD.
+# ---- Pomodoro: temporizador de foco ------------------------------------------
+# Tecnica oficial (Francesco Cirillo): 25 min de foco, 5 de pausa y, cada 4
+# pomodoros, una pausa larga (15-30 min; aqui 15). Preferencias pomodoro.* en
+# config.json; todo se cambia en vivo (menu del pomodoro, deck, Ajustes).
+# Se ve en la pildora y, con la barra acoplada, como un bloque propio con
+# barra de progreso y botones. Al terminar una fase: aviso de Windows, sonido
+# opcional y el bloque parpadea en el color de la fase hasta que lo tocas.
+# Fases: "work" (tomate), "break" (cafe), "long" (palmera). Al acabar el foco
+# la pausa arranca sola (hay que levantarse); al acabar la pausa el siguiente
+# foco espera tu clic (volver a trabajar es una decision).
+Add-Type -TypeDefinition @"
+using System;
+using System.IO;
+using System.Runtime.InteropServices;
+public static class AtalayaChime {
+    [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    // Teclas multimedia (0xB3 play/pausa, 0xB0 siguiente, 0xB1 anterior):
+    // las entiende cualquier reproductor aunque no se pueda leer su estado.
+    public static void MediaKey(byte vk) {
+        keybd_event(vk, 0, 1, UIntPtr.Zero);   // KEYEVENTF_EXTENDEDKEY
+        keybd_event(vk, 0, 3, UIntPtr.Zero);   // + KEYEVENTF_KEYUP
+    }
+    // Campanita sintetizada (WAV en memoria, sin archivos): cada nota es un
+    // seno con dos armonicos y caida exponencial, como una campana suave.
+    public static byte[] Wav(double[] notes, int stepMs, int noteMs, double vol) {
+        const int rate = 22050;
+        int step = stepMs * rate / 1000, len = noteMs * rate / 1000;
+        int total = step * (notes.Length - 1) + len;
+        double[] buf = new double[total];
+        for (int i = 0; i < notes.Length; i++) {
+            double f = notes[i];
+            for (int k = 0; k < len; k++) {
+                double t = (double)k / rate;
+                double env = Math.Min(1.0, t / 0.005) * Math.Exp(-t * 5.5);
+                double s = Math.Sin(2 * Math.PI * f * t)
+                    + 0.3 * Math.Sin(4 * Math.PI * f * t) * Math.Exp(-t * 4)
+                    + 0.12 * Math.Sin(6 * Math.PI * f * t);
+                buf[i * step + k] += s * env * vol;
+            }
+        }
+        MemoryStream ms = new MemoryStream();
+        BinaryWriter w = new BinaryWriter(ms);
+        int data = total * 2;
+        w.Write(new char[] { 'R', 'I', 'F', 'F' }); w.Write(36 + data);
+        w.Write(new char[] { 'W', 'A', 'V', 'E' }); w.Write(new char[] { 'f', 'm', 't', ' ' });
+        w.Write(16); w.Write((short)1); w.Write((short)1); w.Write(rate); w.Write(rate * 2);
+        w.Write((short)2); w.Write((short)16);
+        w.Write(new char[] { 'd', 'a', 't', 'a' }); w.Write(data);
+        for (int i = 0; i < total; i++) {
+            double v = Math.Max(-1.0, Math.Min(1.0, buf[i]));
+            w.Write((short)(v * 32000));
+        }
+        w.Flush();
+        return ms.ToArray();
+    }
+}
+"@
+
 $script:PomoEnabled = $PomoCfgEnabled
 $script:PomoWork = $PomoCfgWork
 $script:PomoBreak = $PomoCfgBreak
+$script:PomoLong = $PomoCfgLong
+$script:PomoEvery = $PomoCfgEvery
+$script:PomoSound = $PomoCfgSound
 $script:PomoPhase = "work"
 $script:PomoRunning = $false
 $script:PomoRemaining = $script:PomoWork * 60
+$script:PomoDone = 0            # pomodoros terminados en la serie actual
 $script:PomoDeckText = $null
+$script:PomoAlertOn = $false    # parpadeo de "se acabo el tiempo"
+$script:PomoFlashOn = $false
+$script:PomoAlertUntil = [DateTime]::MinValue
+$script:PomoPlayer = $null
+
+# Color por fase (y siempre un glifo distinto: tema daltonized)
+$PomoColBreak = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x3F, 0xB3, 0xA8))
+$PomoColLong  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xA9, 0x93, 0xE0))
+$PomoFillWork  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x40, 0xD9, 0x8A, 0x7E))
+$PomoFillBreak = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x40, 0x3F, 0xB3, 0xA8))
+$PomoFillLong  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x40, 0xA9, 0x93, 0xE0))
+# Borde = estado: gris apenas visible en pausa, color de la fase tenue en
+# marcha y solido (y mas grueso) solo cuando avisa de que se acabo el tiempo
+$PomoEdgeIdle  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x40, 0x93, 0xA2, 0xB0))
+$PomoEdgeWork  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x70, 0xD9, 0x8A, 0x7E))
+$PomoEdgeBreak = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x70, 0x3F, 0xB3, 0xA8))
+$PomoEdgeLong  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x70, 0xA9, 0x93, 0xE0))
+$PomoBoxBg     = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x40, 0x0B, 0x10, 0x16))
+$DotFull  = [string][char]0x25CF
+$DotEmpty = [string][char]0x25CB
+
+function Get-PomoGlyph {
+    switch ($script:PomoPhase) { "break" { $GlyphCoffee } "long" { $GlyphPalm } default { $GlyphTomato } }
+}
+function Get-PomoBrush {
+    switch ($script:PomoPhase) { "break" { $PomoColBreak } "long" { $PomoColLong } default { $ColPomo } }
+}
+function Get-PomoFillBrush {
+    switch ($script:PomoPhase) { "break" { $PomoFillBreak } "long" { $PomoFillLong } default { $PomoFillWork } }
+}
+function Get-PomoPhaseName {
+    switch ($script:PomoPhase) { "break" { "Pausa" } "long" { "Pausa larga" } default { "Foco" } }
+}
+function Get-PomoPhaseSec {
+    $m = switch ($script:PomoPhase) { "break" { $script:PomoBreak } "long" { $script:PomoLong } default { $script:PomoWork } }
+    return [int]$m * 60
+}
+# Bolitas de la serie: una por pomodoro hasta la pausa larga
+function Get-PomoDots {
+    $n = [Math]::Max(1, [int]$script:PomoEvery)
+    $done = [Math]::Min($n, [int]$script:PomoDone)
+    return ($DotFull * $done) + ($DotEmpty * ($n - $done))
+}
 
 function Format-PomoTime {
     $sec = [Math]::Max(0, [int]$script:PomoRemaining)
     return "{0}:{1:d2}" -f [int][Math]::Floor($sec / 60), ($sec % 60)
 }
 
+function Get-PomoTip {
+    $estado = if ($script:PomoAlertOn) { "se acabó el tiempo" } elseif ($script:PomoRunning) { "en marcha" } else { "en pausa" }
+    return "$(Get-PomoPhaseName): $(Format-PomoTime) ($estado) - pomodoro $([Math]::Min($script:PomoDone + [int]($script:PomoPhase -eq 'work'), $script:PomoEvery)) de $($script:PomoEvery)`n" +
+        "$($script:PomoWork) min foco / $($script:PomoBreak) pausa / $($script:PomoLong) pausa larga cada $($script:PomoEvery)`n" +
+        "Clic: iniciar o pausar ($($Hotkeys.pomodoro)) - clic derecho: opciones"
+}
+
 function Update-PomoText {
-    if (-not $script:PomoEnabled) {
+    $flash = $script:PomoAlertOn -and $script:PomoFlashOn
+    # En modo reunion el pomodoro no se ve (sigue contando por detras)
+    if (-not $script:PomoEnabled -or $script:Meeting) {
         $txtPomo.Visibility = "Collapsed"
-        return
+    } else {
+        $txtPomo.Visibility = "Visible"
+        $txtPomo.Text = "$(Get-PomoGlyph) $(Format-PomoTime)"
+        $txtPomo.Foreground = Get-PomoBrush
+        $txtPomo.Opacity = if ($script:PomoAlertOn) { if ($flash) { 1.0 } else { 0.3 } } elseif ($script:PomoRunning) { 0.95 } else { 0.5 }
+        $txtPomo.ToolTip = Get-PomoTip
     }
-    $txtPomo.Visibility = "Visible"
-    $g = if ($script:PomoPhase -eq "work") { $GlyphTomato } else { $GlyphCoffee }
-    $txtPomo.Text = "$g $(Format-PomoTime)"
-    $txtPomo.Opacity = if ($script:PomoRunning) { 0.95 } else { 0.5 }
-    $txtPomo.ToolTip = "Pomodoro ($($script:PomoWork)m foco / $($script:PomoBreak)m pausa) - " +
-        "clic: iniciar/pausar ($($Hotkeys.pomodoro)) - clic derecho: reiniciar - tiempos en el deck"
     if ($script:PomoDeckText) {
         try {
-            $script:PomoDeckText.Text = "$g $(Format-PomoTime)"
+            $script:PomoDeckText.Text = "$(Get-PomoGlyph) $(Format-PomoTime)"
             $script:PomoDeckText.Opacity = if ($script:PomoRunning) { 1.0 } else { 0.6 }
         } catch { $script:PomoDeckText = $null }
     }
+    Update-DockExtras
 }
 
 function Save-PomoConfig {
-    $enabled = if ($script:PomoEnabled) { "true" } else { "false" }
-    Invoke-HubPost "/api/config" ('{"pomodoro":{"enabled":' + $enabled +
-        ',"workMin":' + [int]$script:PomoWork + ',"breakMin":' + [int]$script:PomoBreak + '}}')
+    $body = @{ pomodoro = @{
+        enabled = [bool]$script:PomoEnabled; workMin = [int]$script:PomoWork; breakMin = [int]$script:PomoBreak
+        longMin = [int]$script:PomoLong; every = [int]$script:PomoEvery; sound = [bool]$script:PomoSound } }
+    Invoke-HubPost "/api/config" ($body | ConvertTo-Json -Compress -Depth 3)
+}
+
+function Send-PomoToast([string]$title, [string]$text) {
+    if ($script:Meeting) { return }   # nada de avisos en pantalla compartida
+    Invoke-HubPost "/api/toast" (@{ title = $title; body = $text } | ConvertTo-Json -Compress)
+}
+
+# Campanita: subiendo al acabar el foco (a descansar), "ding-dong-ding" al
+# acabar la pausa (de vuelta)
+function Play-PomoChime([string]$kind) {
+    try {
+        $notes = if ($kind -eq "work") { [double[]](1046.5, 783.99, 1046.5, 1318.5) } else { [double[]](659.25, 783.99, 1046.5) }
+        $bytes = [AtalayaChime]::Wav($notes, 170, 900, 0.22)
+        $script:PomoPlayer = [System.Media.SoundPlayer]::new([IO.MemoryStream]::new($bytes))
+        $script:PomoPlayer.Play()
+    } catch { Write-HudLog "pomodoro: sonido: $_" }
+}
+
+$script:PomoAlertTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:PomoAlertTimer.Interval = [TimeSpan]::FromMilliseconds(500)
+$script:PomoAlertTimer.Add_Tick({
+    if ((Get-Date) -gt $script:PomoAlertUntil) { Stop-PomoAlert; return }
+    $script:PomoFlashOn = -not $script:PomoFlashOn
+    Update-PomoText
+})
+# $next = fase que empieza ("break"/"long" o "work"): decide la campanita
+function Start-PomoAlert([string]$next) {
+    $script:PomoAlertOn = $true
+    $script:PomoFlashOn = $true
+    $script:PomoAlertUntil = (Get-Date).AddSeconds(45)
+    $script:PomoAlertTimer.Start()
+    if ($script:PomoSound -and -not $script:Meeting) { Play-PomoChime $(if ($next -eq "work") { "work" } else { "break" }) }
+}
+function Stop-PomoAlert {
+    if (-not $script:PomoAlertOn) { return }
+    $script:PomoAlertOn = $false
+    $script:PomoFlashOn = $false
+    $script:PomoAlertTimer.Stop()
+    Update-PomoText
+}
+
+function Complete-PomoPhase {
+    if ($script:PomoPhase -eq "work") {
+        $script:PomoDone++
+        if ($script:PomoDone -ge $script:PomoEvery) {
+            $script:PomoPhase = "long"
+            Send-PomoToast "Pomodoro: pausa larga" ("$($script:PomoEvery) pomodoros seguidos. $($script:PomoLong) min de pausa larga: sal a dar una vuelta.")
+        } else {
+            $script:PomoPhase = "break"
+            Send-PomoToast "Pomodoro: pausa" ("Pomodoro $($script:PomoDone) de $($script:PomoEvery) hecho. $($script:PomoBreak) min: levántate y mira lejos.")
+        }
+        $script:PomoRemaining = Get-PomoPhaseSec
+        Start-PomoAlert $script:PomoPhase
+    } else {
+        if ($script:PomoPhase -eq "long") { $script:PomoDone = 0 }
+        $script:PomoPhase = "work"
+        $script:PomoRemaining = Get-PomoPhaseSec
+        $script:PomoRunning = $false
+        $script:PomoTimer.Stop()
+        Send-PomoToast "Pomodoro: fin de la pausa" ("Cuando quieras, clic en el pomodoro para otro bloque de $($script:PomoWork) min.")
+        Start-PomoAlert "work"
+    }
+    Update-Deck $script:LastSummary
 }
 
 $script:PomoTimer = New-Object System.Windows.Threading.DispatcherTimer
@@ -2589,24 +2897,12 @@ $script:PomoTimer.Interval = [TimeSpan]::FromSeconds(1)
 $script:PomoTimer.Add_Tick({
     if (-not $script:PomoRunning) { return }
     $script:PomoRemaining--
-    if ($script:PomoRemaining -le 0) {
-        if ($script:PomoPhase -eq "work") {
-            $script:PomoPhase = "break"
-            $script:PomoRemaining = $script:PomoBreak * 60
-            Invoke-HubPost "/api/toast" ('{"title":"Pomodoro: descanso","body":"' +
-                $script:PomoBreak + ' min de pausa. Levanta la vista del teclado."}')
-        } else {
-            $script:PomoPhase = "work"
-            $script:PomoRemaining = $script:PomoWork * 60
-            Invoke-HubPost "/api/toast" ('{"title":"Pomodoro: a trabajar","body":"Bloque de foco de ' +
-                $script:PomoWork + ' min."}')
-        }
-        Update-Deck $script:LastSummary
-    }
+    if ($script:PomoRemaining -le 0) { Complete-PomoPhase }
     Update-PomoText
 })
 
 function Toggle-Pomodoro {
+    Stop-PomoAlert
     if (-not $script:PomoEnabled) {
         $script:PomoEnabled = $true
         Save-PomoConfig
@@ -2618,11 +2914,29 @@ function Toggle-Pomodoro {
     Position-Deck
 }
 
+# Reiniciar = empezar de cero: foco completo, en pausa y la serie a cero
 function Reset-Pomodoro {
+    Stop-PomoAlert
     $script:PomoRunning = $false
     $script:PomoTimer.Stop()
     $script:PomoPhase = "work"
-    $script:PomoRemaining = $script:PomoWork * 60
+    $script:PomoDone = 0
+    $script:PomoRemaining = Get-PomoPhaseSec
+    Update-PomoText
+    Update-Deck $script:LastSummary
+}
+
+# Saltar a la siguiente fase sin esperar. Un foco saltado no cuenta como
+# pomodoro (regla de la tecnica: el pomodoro es indivisible).
+function Skip-PomoPhase {
+    Stop-PomoAlert
+    if ($script:PomoPhase -eq "work") {
+        $script:PomoPhase = "break"
+    } else {
+        if ($script:PomoPhase -eq "long") { $script:PomoDone = 0 }
+        $script:PomoPhase = "work"
+    }
+    $script:PomoRemaining = Get-PomoPhaseSec
     Update-PomoText
     Update-Deck $script:LastSummary
 }
@@ -2630,6 +2944,7 @@ function Reset-Pomodoro {
 function Set-PomoEnabled([bool]$v) {
     $script:PomoEnabled = $v
     if (-not $v) {
+        Stop-PomoAlert
         $script:PomoRunning = $false
         $script:PomoTimer.Stop()
     }
@@ -2639,15 +2954,75 @@ function Set-PomoEnabled([bool]$v) {
     Position-Deck
 }
 
-function Set-PomoTimes([int]$work, [int]$brk) {
+function Set-PomoTimes([int]$work, [int]$brk, [int]$long = 0) {
     $script:PomoWork = [Math]::Min(120, [Math]::Max(5, $work))
     $script:PomoBreak = [Math]::Min(60, [Math]::Max(1, $brk))
-    if (-not $script:PomoRunning) {
-        $script:PomoRemaining = $(if ($script:PomoPhase -eq "work") { $script:PomoWork } else { $script:PomoBreak }) * 60
-    }
+    if ($long -gt 0) { $script:PomoLong = [Math]::Min(60, [Math]::Max(5, $long)) }
+    if (-not $script:PomoRunning) { $script:PomoRemaining = Get-PomoPhaseSec }
     Save-PomoConfig
     Update-PomoText
     Update-Deck $script:LastSummary
+}
+
+# --- Menu del pomodoro: clic derecho en la pildora o en la barra, y en la
+# bandeja (Utilidades > Pomodoro). El mismo contenido en los tres sitios.
+$script:PomoMenu = New-Object System.Windows.Forms.ContextMenuStrip
+$PomoPresets = @(
+    @(25, 5, 15, "25 min foco / 5 pausa / 15 larga (técnica oficial)"),
+    @(50, 10, 30, "50 / 10 / 30 (bloques largos)"),
+    @(15, 3, 10, "15 / 3 / 10 (arrancar cuando cuesta)"))
+
+function Add-PomoMenuItem($items, [string]$text, [string]$tag, [bool]$checked = $false, [bool]$enabled = $true) {
+    $it = New-Object System.Windows.Forms.ToolStripMenuItem
+    $it.Text = $text; $it.Tag = $tag; $it.Checked = $checked; $it.Enabled = $enabled
+    if ($tag) { $it.Add_Click({ param($sender, $e) On-PomoMenu $sender $e }) }
+    [void]$items.Add($it)
+    return $it
+}
+function Fill-PomoMenu($items) {
+    $items.Clear()
+    if ($script:PomoEnabled) {
+        $estado = if ($script:PomoRunning) { "en marcha" } else { "en pausa" }
+        [void](Add-PomoMenuItem $items "$(Get-PomoGlyph) $(Get-PomoPhaseName) $(Format-PomoTime) - $estado - $(Get-PomoDots)" "" $false $false)
+        [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+        $run = if ($script:PomoRunning) { "Pausar" } elseif ($script:PomoRemaining -lt (Get-PomoPhaseSec)) { "Reanudar" } else { "Iniciar" }
+        $gest = if ($Hotkeys.pomodoro -and $Hotkeys.pomodoro.Trim().ToLower() -ne "none") { "  ($($Hotkeys.pomodoro))" } else { "" }
+        $it = Add-PomoMenuItem $items "$run$gest" "toggle"
+        try { $it.Font = New-Object System.Drawing.Font($it.Font, [System.Drawing.FontStyle]::Bold) } catch { }
+        $skip = if ($script:PomoPhase -eq "work") { "Saltar a la pausa" } else { "Saltar al foco" }
+        [void](Add-PomoMenuItem $items $skip "skip")
+        [void](Add-PomoMenuItem $items "Reiniciar (foco completo, serie a cero)" "reset")
+        [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+        foreach ($p in $PomoPresets) {
+            $on = $script:PomoWork -eq $p[0] -and $script:PomoBreak -eq $p[1] -and $script:PomoLong -eq $p[2]
+            [void](Add-PomoMenuItem $items $p[3] ("p:{0}:{1}:{2}" -f $p[0], $p[1], $p[2]) $on)
+        }
+        [void](Add-PomoMenuItem $items "Otros tiempos en Ajustes..." "settings")
+        [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+        [void](Add-PomoMenuItem $items "Sonido al terminar cada fase" "sound" $script:PomoSound)
+    }
+    [void](Add-PomoMenuItem $items "Mostrar el pomodoro" "show" $script:PomoEnabled)
+}
+function On-PomoMenu($sender, $e) {
+    $t = [string]$sender.Tag
+    switch -Wildcard ($t) {
+        "toggle"   { Toggle-Pomodoro }
+        "skip"     { Skip-PomoPhase }
+        "reset"    { Reset-Pomodoro }
+        "settings" { Open-PanelSettings }
+        "show"     { Set-PomoEnabled (-not $script:PomoEnabled) }
+        "sound"    {
+            $script:PomoSound = -not $script:PomoSound
+            Save-PomoConfig
+            if ($script:PomoSound) { Play-PomoChime "break" }   # muestra de como suena
+        }
+        "p:*"      { $v = $t.Split(":"); Set-PomoTimes ([int]$v[1]) ([int]$v[2]) ([int]$v[3]) }
+    }
+}
+function Show-PomoMenu {
+    Stop-PomoAlert
+    Fill-PomoMenu $script:PomoMenu.Items
+    $script:PomoMenu.Show([System.Windows.Forms.Control]::MousePosition)
 }
 
 $txtPomo.Cursor = "Hand"
@@ -2656,12 +3031,301 @@ $txtPomo.Add_MouseLeftButtonDown({
     $e.Handled = $true
     Toggle-Pomodoro
 })
-$txtPomo.Add_MouseRightButtonUp({ param($src, $e) $e.Handled = $true })
-$txtPomo.Add_MouseRightButtonDown({
+$txtPomo.Add_MouseRightButtonDown({ param($src, $e) $e.Handled = $true })
+$txtPomo.Add_MouseRightButtonUp({
     param($src, $e)
     $e.Handled = $true
-    Reset-Pomodoro
+    Show-PomoMenu
 })
+
+# ---- Musica: controles del reproductor en la barra acoplada -------------------
+# Windows publica la sesion de medios activa (Spotify, YouTube en el
+# navegador, etc.) por la API GlobalSystemMediaTransportControls (WinRT). Con
+# ella se lee titulo/artista/estado y se manda play, pausa, siguiente o
+# anterior a ESA app. Si la API no esta, los botones envian teclas multimedia.
+# Las llamadas asincronas de WinRT se lanzan y se recogen en el tick
+# siguiente: nunca se espera en el hilo de la interfaz.
+$script:MusicEnabled = $MusicCfg
+$script:MusicApi = $null          # $null sin probar, $true lista, $false no disponible
+$script:MusicAsTask = $null
+$script:MusicMgrTask = $null
+$script:MusicMgr = $null
+$script:MusicSession = $null
+$script:MusicPropsTask = $null
+$script:MusicTitle = ""
+$script:MusicArtist = ""
+$script:MusicApp = ""
+$script:MusicPlaying = $false
+$script:MusicErrLogged = $false
+$script:MusicShowTitle = $MusicTitleCfg
+
+function Initialize-MusicApi {
+    if ($null -ne $script:MusicApi) { return }
+    try {
+        Add-Type -AssemblyName System.Runtime.WindowsRuntime
+        $mgrType = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionManager, Windows.Media.Control, ContentType = WindowsRuntime]
+        $script:MusicAsTask = [System.WindowsRuntimeSystemExtensions].GetMethods() | Where-Object {
+            $_.Name -eq "AsTask" -and $_.GetParameters().Count -eq 1 -and
+            $_.GetParameters()[0].ParameterType.Name -eq 'IAsyncOperation`1' } | Select-Object -First 1
+        $script:MusicMgrTask = $script:MusicAsTask.MakeGenericMethod($mgrType).Invoke($null, @($mgrType::RequestAsync()))
+        $script:MusicApi = $true
+    } catch {
+        $script:MusicApi = $false
+        Write-HudLog "musica: sin acceso a la sesion de medios de Windows ($_); uso teclas multimedia"
+    }
+}
+
+function Get-MusicAppName([string]$aumid) {
+    if (-not $aumid) { return "" }
+    if ($aumid -match "(?i)spotify") { return "Spotify" }
+    $n = ($aumid -split "[!._]")[0]
+    if ($n -match "(?i)^msedge$") { return "Edge" }
+    return $n
+}
+
+function Update-MusicState {
+    if (-not $script:MusicEnabled -or -not $script:MusicApi -or $script:DockBars.Count -eq 0) { return }
+    try {
+        if (-not $script:MusicMgr) {
+            if (-not $script:MusicMgrTask -or -not $script:MusicMgrTask.IsCompleted) { return }
+            if ($script:MusicMgrTask.IsFaulted) { throw $script:MusicMgrTask.Exception }
+            $script:MusicMgr = $script:MusicMgrTask.Result
+        }
+        $s = $script:MusicMgr.GetCurrentSession()
+        $script:MusicSession = $s
+        if (-not $s) {
+            $script:MusicTitle = ""; $script:MusicArtist = ""; $script:MusicApp = ""; $script:MusicPlaying = $false
+        } else {
+            $script:MusicPlaying = [string]$s.GetPlaybackInfo().PlaybackStatus -eq "Playing"
+            $script:MusicApp = Get-MusicAppName ([string]$s.SourceAppUserModelId)
+            $t = $script:MusicPropsTask
+            if ($t -and $t.IsCompleted) {
+                # Al cambiar de cancion la app publica un instante sin titulo:
+                # se conserva el anterior hasta que llegue el nuevo
+                if (-not $t.IsFaulted -and [string]$t.Result.Title) {
+                    $script:MusicTitle = [string]$t.Result.Title
+                    $script:MusicArtist = [string]$t.Result.Artist
+                }
+                $script:MusicPropsTask = $null
+            }
+            if (-not $script:MusicPropsTask) {
+                $pt = [Windows.Media.Control.GlobalSystemMediaTransportControlsSessionMediaProperties]
+                $script:MusicPropsTask = $script:MusicAsTask.MakeGenericMethod($pt).Invoke($null, @($s.TryGetMediaPropertiesAsync()))
+            }
+        }
+    } catch {
+        if (-not $script:MusicErrLogged) { Write-HudLog "musica: $_"; $script:MusicErrLogged = $true }
+        $script:MusicMgr = $null; $script:MusicSession = $null
+        $script:MusicApi = $null; Initialize-MusicApi
+    }
+    Update-DockExtras
+}
+
+function Invoke-Music([string]$act) {
+    $s = $script:MusicSession
+    $sent = $false
+    if ($s) {
+        try {
+            switch ($act) {
+                "toggle" { $null = $s.TryTogglePlayPauseAsync(); $script:MusicPlaying = -not $script:MusicPlaying }
+                "next"   { $null = $s.TrySkipNextAsync() }
+                "prev"   { $null = $s.TrySkipPreviousAsync() }
+            }
+            $sent = $true
+        } catch { }
+    }
+    if (-not $sent) {
+        $vk = switch ($act) { "next" { 0xB0 } "prev" { 0xB1 } default { 0xB3 } }
+        [AtalayaChime]::MediaKey([byte]$vk)
+    }
+    Update-DockExtras
+}
+
+function Set-MusicEnabled([bool]$v) {
+    $script:MusicEnabled = $v
+    if ($v) { Initialize-MusicApi }
+    Invoke-HubPost "/api/config" ('{"bar":{"music":' + $(if ($v) { "true" } else { "false" }) + '}}')
+    Update-DockExtras
+    Update-TrayMenuState
+}
+
+# Modo reunion: un interruptor para compartir pantalla sin ensenar nombres de
+# escritorios (pildora, barra, barra de tareas, deck), el titulo de lo que
+# suena ni el pomodoro. El pomodoro sigue contando, pero sin sonido ni avisos
+# hasta salir del modo; los controles de musica se quedan (son utiles y no
+# revelan nada sin el titulo).
+function Set-MeetingMode([bool]$v) {
+    $script:Meeting = $v
+    Write-HudLog "modo reunion: $(if ($v) { 'activado' } else { 'desactivado' })"
+    Invoke-HubPost "/api/config" ('{"privacy":{"meeting":' + $(if ($v) { "true" } else { "false" }) + '}}')
+    foreach ($b in $script:DockBars) { $b.Key = "" }
+    $script:TbKey = ""
+    Update-Hud
+    Update-PomoText
+    Update-TrayMenuState
+    try { Update-Deck $script:LastSummary } catch { }
+}
+
+$script:MusicTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:MusicTimer.Interval = [TimeSpan]::FromSeconds(1)
+$script:MusicTimer.Add_Tick({ Update-MusicState })
+if ($script:MusicEnabled) { Initialize-MusicApi }
+$script:MusicTimer.Start()
+
+# ---- Bloques extra de la barra acoplada: pomodoro y musica -------------------
+# Se crean una vez por barra (New-DockExtras) y se actualizan en el sitio cada
+# segundo (Update-DockExtras), sin rehacer la barra entera.
+$IconFont = New-Object Windows.Media.FontFamily("Segoe Fluent Icons, Segoe MDL2 Assets")
+$IcoPlay  = [string][char]0xE768
+$IcoPause = [string][char]0xE769
+$IcoPrev  = [string][char]0xE892
+$IcoNext  = [string][char]0xE893
+$IcoReset = [string][char]0xE72C
+$IcoSkip  = [string][char]0xE72A
+$IcoNote  = [string][char]0xE8D6
+
+function New-DockIconBtn([string]$icon, [string]$tip, [string]$tag) {
+    $tb = New-Object Windows.Controls.TextBlock
+    $tb.Text = $icon; $tb.FontFamily = $IconFont; $tb.FontSize = 11; $tb.Foreground = $ColInk
+    $tb.HorizontalAlignment = "Center"; $tb.VerticalAlignment = "Center"
+    $b = New-Object Windows.Controls.Border
+    $b.Child = $tb; $b.Background = $BgRow; $b.CornerRadius = 4; $b.Cursor = "Hand"
+    $b.Padding = if (Test-DockVertical) { "0,4" } else { "6,4" }
+    $b.VerticalAlignment = "Center"
+    $b.ToolTip = $tip; $b.Tag = $tag
+    $b.Add_MouseEnter({ param($src, $e) $src.Background = $BgRowHov })
+    $b.Add_MouseLeave({ param($src, $e) $src.Background = $BgRow })
+    $b.Add_MouseLeftButtonDown({ param($src, $e) $e.Handled = $true })
+    $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockExtraClick $src $e })
+    return $b
+}
+
+function On-DockExtraClick($src, $e) {
+    $e.Handled = $true
+    switch ([string]$src.Tag) {
+        "pomo-toggle"  { Toggle-Pomodoro }
+        "pomo-reset"   { Reset-Pomodoro }
+        "pomo-skip"    { Skip-PomoPhase }
+        "music-prev"   { Invoke-Music "prev" }
+        "music-toggle" { Invoke-Music "toggle" }
+        "music-next"   { Invoke-Music "next" }
+    }
+}
+
+function New-DockExtras($panel) {
+    $vertical = Test-DockVertical
+    $x = @{}
+    # Pomodoro: el fondo se va llenando con el color de la fase (progreso)
+    $box = New-Object Windows.Controls.Border
+    $box.CornerRadius = 7; $box.BorderThickness = 1; $box.Cursor = "Hand"; $box.Tag = "pomo-toggle"
+    $box.Margin = if ($vertical) { "0,0,0,8" } else { "0,0,10,0" }
+    $box.VerticalAlignment = "Center"
+    $grid = New-Object Windows.Controls.Grid
+    $fill = New-Object Windows.Controls.Border
+    $fill.CornerRadius = 6
+    $scale = New-Object Windows.Media.ScaleTransform -ArgumentList 1.0, 1.0
+    $fill.RenderTransform = $scale
+    $fill.RenderTransformOrigin = if ($vertical) { "0.5,1" } else { "0,0.5" }
+    [void]$grid.Children.Add($fill)
+    $row = New-Object Windows.Controls.StackPanel
+    $glyph = New-DockText "" $ColInk $false
+    $time = New-DockText "" $ColInk $true
+    $dots = New-DockText "" $ColInk2 $false
+    $run = New-DockIconBtn $IcoPlay "Iniciar o pausar ($($Hotkeys.pomodoro))" "pomo-toggle"
+    if ($vertical) {
+        $row.Orientation = "Vertical"; $row.Margin = "0,4,0,2"
+        $glyph.FontSize = 13; $time.FontSize = 10.5; $dots.FontSize = 6.5
+        foreach ($el in @($glyph, $time, $dots, $run)) { $el.HorizontalAlignment = "Center" }
+        $dots.Margin = "0,1,0,1"
+        foreach ($el in @($glyph, $time, $dots, $run)) { [void]$row.Children.Add($el) }
+    } else {
+        $row.Orientation = "Horizontal"; $row.Margin = "8,0,2,0"
+        $time.FontSize = 12.5; $time.Margin = "5,0,0,0"; $time.Width = 44; $time.TextAlignment = "Center"   # ancho fijo: 25:00 y 9:59 no mueven los botones
+        $dots.FontSize = 8; $dots.Margin = "6,0,6,0"
+        foreach ($el in @($glyph, $time, $dots, $run)) { [void]$row.Children.Add($el) }
+        [void]$row.Children.Add((New-DockIconBtn $IcoSkip "Saltar a la siguiente fase" "pomo-skip"))
+        [void]$row.Children.Add((New-DockIconBtn $IcoReset "Reiniciar (foco completo, serie a cero)" "pomo-reset"))
+    }
+    [void]$grid.Children.Add($row)
+    $box.Child = $grid
+    $box.Add_MouseLeftButtonDown({ param($src, $e) $e.Handled = $true })
+    $box.Add_MouseLeftButtonUp({ param($src, $e) On-DockExtraClick $src $e })
+    $box.Add_MouseRightButtonUp({ param($src, $e) $e.Handled = $true; Show-PomoMenu })
+    [void]$panel.Children.Add($box)
+    $x.PomoBox = $box; $x.PomoFill = $fill; $x.PomoScale = $scale
+    $x.PomoGlyph = $glyph; $x.PomoTime = $time; $x.PomoDots = $dots; $x.PomoRun = $run.Child
+
+    # Musica: anterior / play-pausa / siguiente y, en horizontal, lo que suena
+    $mus = New-Object Windows.Controls.StackPanel
+    $mus.Orientation = if ($vertical) { "Vertical" } else { "Horizontal" }
+    $mus.Margin = if ($vertical) { "0,0,0,8" } else { "0,0,10,0" }
+    $mus.VerticalAlignment = "Center"
+    $note = New-Object Windows.Controls.TextBlock
+    $note.Text = $IcoNote; $note.FontFamily = $IconFont; $note.FontSize = 11; $note.Foreground = $ColInk3
+    $note.VerticalAlignment = "Center"; $note.HorizontalAlignment = "Center"
+    $note.Margin = if ($vertical) { "0,0,0,2" } else { "0,0,4,0" }
+    [void]$mus.Children.Add($note)
+    $play = New-DockIconBtn $IcoPlay "Reproducir o pausar" "music-toggle"
+    foreach ($b in @((New-DockIconBtn $IcoPrev "Anterior" "music-prev"), $play, (New-DockIconBtn $IcoNext "Siguiente" "music-next"))) {
+        [void]$mus.Children.Add($b)
+    }
+    $title = New-DockText "" $ColInk2 $false
+    # Ancho FIJO: si el texto cambiara de largo (o se vaciara un instante al
+    # pasar de cancion), todo el bloque se desplazaria y el boton que ibas a
+    # pulsar otra vez ya no estaria bajo el raton
+    $title.FontSize = 11.5; $title.Width = 180; $title.Margin = "6,0,0,0"
+    if (-not $vertical) { [void]$mus.Children.Add($title) }
+    $mus.Background = $BgRow
+    [void]$panel.Children.Add($mus)
+    $x.Music = $mus; $x.MusicPlay = $play.Child; $x.MusicTitle = $title
+    return $x
+}
+
+function Update-DockExtras {
+    if ($script:DockBars.Count -eq 0) { return }
+    $vertical = Test-DockVertical
+    $flash = $script:PomoAlertOn -and $script:PomoFlashOn
+    $col = Get-PomoBrush
+    $total = Get-PomoPhaseSec
+    $frac = if ($total -gt 0) { [Math]::Max(0.0, [Math]::Min(1.0, 1.0 - ($script:PomoRemaining / $total))) } else { 0.0 }
+    $musicTip = if ($script:MusicTitle -and $script:Meeting) { "Modo reunión: título oculto" } elseif ($script:MusicTitle) {
+        "$($script:MusicTitle)$(if ($script:MusicArtist) { ' - ' + $script:MusicArtist })$(if ($script:MusicApp) { ' (' + $script:MusicApp + ')' })"
+    } elseif ($script:MusicApi -and $script:MusicMgr) { "No suena nada (los botones despiertan al último reproductor)" } else { "Controles de música (teclas multimedia)" }
+    $musicTip += "`nSe quitan en el menú: Utilidades > Controles de música"
+    foreach ($bar in $script:DockBars) {
+        $x = $bar.X
+        if (-not $x) { continue }
+        try {
+            $pomoOn = $script:PomoEnabled -and -not $script:Meeting
+            $x.PomoBox.Visibility = if ($pomoOn) { "Visible" } else { "Collapsed" }
+            if ($pomoOn) {
+                $x.PomoGlyph.Text = Get-PomoGlyph
+                $x.PomoTime.Text = Format-PomoTime
+                $x.PomoDots.Text = Get-PomoDots
+                $x.PomoDots.Foreground = $col
+                if ($vertical) { $x.PomoScale.ScaleY = $frac; $x.PomoScale.ScaleX = 1.0 } else { $x.PomoScale.ScaleX = $frac; $x.PomoScale.ScaleY = 1.0 }
+                $x.PomoFill.Background = Get-PomoFillBrush
+                $x.PomoBox.BorderBrush = if ($script:PomoAlertOn) { $col } elseif ($script:PomoRunning) {
+                    switch ($script:PomoPhase) { "break" { $PomoEdgeBreak } "long" { $PomoEdgeLong } default { $PomoEdgeWork } }
+                } else { $PomoEdgeIdle }
+                $x.PomoBox.BorderThickness = [Windows.Thickness]::new($(if ($script:PomoAlertOn) { 2 } else { 1 }))
+                $x.PomoBox.Background = if ($flash) { $col } else { $PomoBoxBg }
+                $x.PomoTime.Foreground = if ($flash) { $DockBg } elseif ($script:PomoRunning) { $ColInk } else { $ColInk2 }
+                $x.PomoRun.Text = if ($script:PomoRunning) { $IcoPause } else { $IcoPlay }
+                $x.PomoRun.Foreground = if ($flash) { $DockBg } else { $ColInk }
+                $x.PomoBox.ToolTip = Get-PomoTip
+            }
+            $x.Music.Visibility = if ($script:MusicEnabled) { "Visible" } else { "Collapsed" }
+            if ($script:MusicEnabled) {
+                $x.MusicPlay.Text = if ($script:MusicPlaying) { $IcoPause } else { $IcoPlay }
+                $x.MusicTitle.Visibility = if ($script:MusicShowTitle -and -not $script:Meeting) { "Visible" } else { "Collapsed" }
+                $x.MusicTitle.Text = if ($script:MusicTitle) { $script:MusicTitle } else { "sin música" }
+                $x.MusicTitle.Foreground = if ($script:MusicPlaying -and $script:MusicTitle) { $ColInk } else { $ColInk3 }
+                $x.Music.ToolTip = $musicTip
+            }
+        } catch { }
+    }
+}
 
 # ---- Primer plano y topmost --------------------------------------------------
 # Cada tick: (1) reporta al hub la ventana activa (apaga alertas ya leidas),
@@ -2815,6 +3479,8 @@ function Update-TrayMenuState {
         if ($script:TrayCompact) { $script:TrayCompact.Checked = [bool]$script:PillCompact }
         if ($script:TrayTaskbar) { $script:TrayTaskbar.Checked = [bool]$script:TaskbarMode }
         if ($script:TrayDock) { $script:TrayDock.Checked = [bool]$script:DockEdge }
+        if ($script:TrayMusic) { $script:TrayMusic.Checked = [bool]$script:MusicEnabled }
+        if ($script:TrayMeeting) { $script:TrayMeeting.Checked = [bool]$script:Meeting }
     } catch { }
 }
 
@@ -2826,9 +3492,9 @@ function Invoke-UpdateAction {
     $u = $null
     if ($script:LastSummary) { $u = $script:LastSummary.update }
     if ($u -and $u.available) {
-        $que = if ($u.tag) { [string]$u.tag } else { "la ultima version publicada" }
+        $que = if ($u.tag) { [string]$u.tag } else { "la última versión publicada" }
         $r = [System.Windows.MessageBox]::Show(
-            "Atalaya se actualizara a $que y reiniciara el hub y el HUD.`n`nContinuar?",
+            "Atalaya se actualizará a $que y reiniciará el hub y el HUD.`n`n¿Continuar?",
             "Actualizar Atalaya",
             [System.Windows.MessageBoxButton]::YesNo,
             [System.Windows.MessageBoxImage]::Question)
@@ -2862,8 +3528,8 @@ function Exit-Atalaya {
 function Update-TrayStatus($s) {
     try {
         if ($null -eq $s) {
-            $script:Tray.Text = "Atalaya - hub sin conexion"
-            $script:TrayStatus.Text = "Atalaya - hub sin conexion"
+            $script:Tray.Text = "Atalaya - hub sin conexión"
+            $script:TrayStatus.Text = "Atalaya - hub sin conexión"
             if ($script:TrayUrgent) { $script:TrayUrgent.Enabled = $false }
             return
         }
@@ -2876,10 +3542,10 @@ function Update-TrayStatus($s) {
         if ($script:TrayUrgent) { $script:TrayUrgent.Enabled = [int]$s.needs_you -gt 0 }
         if ($script:TrayUpdate) {
             if ($s.update -and $s.update.available) {
-                $que = if ($s.update.tag) { [string]$s.update.tag } else { "la ultima version" }
+                $que = if ($s.update.tag) { [string]$s.update.tag } else { "la última versión" }
                 $script:TrayUpdate.Text = "Actualizar Atalaya a $que"
                 # Que no quede escondida dentro del submenu
-                if ($script:TrayMaint) { $script:TrayMaint.Text = "Mantenimiento - hay actualizacion" }
+                if ($script:TrayMaint) { $script:TrayMaint.Text = "Mantenimiento - hay actualización" }
             } else {
                 $script:TrayUpdate.Text = "Buscar actualizaciones"
                 if ($script:TrayMaint) { $script:TrayMaint.Text = "Mantenimiento" }
@@ -2921,8 +3587,8 @@ function Invoke-ClearWindow {
     if (-not $target) { return }
     $r = [AtalayaHotkey]::NudgeAway($target, $script:PillHwnd)
     switch ($r) {
-        1 { Invoke-HubPost "/api/toast" '{"title":"Atalaya","body":"La ventana activa no solapa la pildora."}' }
-        2 { Invoke-HubPost "/api/toast" '{"title":"Atalaya","body":"Sin recorte razonable: mueve la pildora o achica la ventana a mano."}' }
+        1 { Invoke-HubPost "/api/toast" '{"title":"Atalaya","body":"La ventana activa no solapa la píldora."}' }
+        2 { Invoke-HubPost "/api/toast" '{"title":"Atalaya","body":"Sin recorte razonable: mueve la píldora o achica la ventana a mano."}' }
     }
 }
 
@@ -3014,32 +3680,42 @@ $script:TrayStatus.Enabled = $false
 Add-TraySep
 
 # Se habilita solo cuando alguien espera (ver Update-TrayStatus)
-$script:TrayUrgent = Add-TrayItem "Ir a la sesion que te necesita" $Hotkeys.jumpUrgent { Jump-Urgent }
+$script:TrayUrgent = Add-TrayItem "Ir a la sesión que te necesita" $Hotkeys.jumpUrgent { Jump-Urgent }
 $script:TrayUrgent.Enabled = $false
 $null = Add-TrayItem "Abrir el panel" $Hotkeys.togglePanel { Open-Panel }
 # El rescate va en negrita: es la razon principal por la que alguien busca
 # este menu.
-$miTrayHome = Add-TrayItem "Recentrar la pildora" $Hotkeys.recenterPill { Move-PillHome }
+$miTrayHome = Add-TrayItem "Recentrar la píldora" $Hotkeys.recenterPill { Move-PillHome }
 try { $miTrayHome.Font = New-Object System.Drawing.Font($trayMenu.Font, [System.Drawing.FontStyle]::Bold) } catch { }
 Add-TraySep
-
-$smShow = Add-TraySubmenu "Mostrar"
-$script:TrayPillToggle = Add-TrayItem "Pildora" $Hotkeys.togglePill { Toggle-Pill } $smShow
-$script:TrayCompact = Add-TrayItem "Pildora compacta" $Hotkeys.compactPill { Toggle-PillCompact } $smShow
-$script:TrayTaskbar = Add-TrayItem "Escritorios en la barra de tareas" "" { Toggle-TaskbarMode } $smShow
-# Submenu con borde y monitor; se rellena al abrirse (Update-DockMenu)
+# Interruptores rapidos (p. ej. antes de compartir pantalla en una reunion)
+$script:TrayMeeting = Add-TrayItem "Modo reunión (ocultar nombres)" $Hotkeys.meetingMode { Set-MeetingMode (-not $script:Meeting) }
+# Submenu con contenido, posicion, borde y monitor; se rellena al abrirse
+# (Update-DockMenu). Los interruptores de contenido no cierran el menu.
 $script:TrayDock = New-Object System.Windows.Forms.ToolStripMenuItem
 $script:TrayDock.Text = "Barra acoplada"
 [void]$script:TrayDock.DropDownItems.Add("...")
 $script:TrayDock.Add_DropDownOpening({ Update-DockMenu })
-[void]$smShow.DropDownItems.Add($script:TrayDock)
-$null = Add-TrayItem "Ocultar la pildora 15 minutos" "" { Hide-PillFor 15 } $smShow
+$script:DockKeepOpen = $false
+$script:TrayDock.DropDown.Add_Closing({
+    param($sender, $e)
+    if ($script:DockKeepOpen -and $e.CloseReason -eq [System.Windows.Forms.ToolStripDropDownCloseReason]::ItemClicked) { $e.Cancel = $true }
+    $script:DockKeepOpen = $false
+})
+[void]$trayMenu.Items.Add($script:TrayDock)
+Add-TraySep
+
+$smShow = Add-TraySubmenu "Mostrar"
+$script:TrayPillToggle = Add-TrayItem "Píldora" $Hotkeys.togglePill { Toggle-Pill } $smShow
+$script:TrayCompact = Add-TrayItem "Píldora compacta" $Hotkeys.compactPill { Toggle-PillCompact } $smShow
+$script:TrayTaskbar = Add-TrayItem "Escritorios en la barra de tareas" "" { Toggle-TaskbarMode } $smShow
+$null = Add-TrayItem "Ocultar la píldora 15 minutos" "" { Hide-PillFor 15 } $smShow
 Add-TraySep $smShow
 $null = Add-TrayItem "Deck (mostrar/ocultar)" $Hotkeys.toggleDeck {
     if ($script:PillHidden) { Show-Pill }
     if ($deck.IsVisible) { Hide-Deck } else { Show-Deck }
 } $smShow
-$null = Add-TrayItem "Panel en maximo foco" "" { Open-PanelMax } $smShow
+$null = Add-TrayItem "Panel en máximo foco" "" { Open-PanelMax } $smShow
 
 $smDesk = Add-TraySubmenu "Escritorio"
 $null = Add-TrayItem "Renombrar el actual" $Hotkeys.renameDesktop { Rename-CurrentDesktop } $smDesk
@@ -3049,7 +3725,13 @@ Add-TraySep $smDesk
 $null = Add-TrayItem "Anclar Atalaya a todos los escritorios" "" { Pin-ToAllDesktops } $smDesk
 
 $smTools = Add-TraySubmenu "Utilidades"
-$null = Add-TrayItem "Pomodoro: iniciar/pausar" $Hotkeys.pomodoro { Toggle-Pomodoro } $smTools
+# Mismo contenido que el clic derecho sobre el pomodoro (Fill-PomoMenu)
+$script:TrayPomo = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:TrayPomo.Text = "Pomodoro"
+[void]$script:TrayPomo.DropDownItems.Add("...")
+$script:TrayPomo.Add_DropDownOpening({ Fill-PomoMenu $script:TrayPomo.DropDownItems })
+[void]$smTools.DropDownItems.Add($script:TrayPomo)
+$script:TrayMusic = Add-TrayItem "Controles de música en la barra acoplada" "" { Set-MusicEnabled (-not $script:MusicEnabled) } $smTools
 $null = Add-TrayItem "Apartar la ventana activa" $Hotkeys.clearWindow { Invoke-ClearWindow } $smTools
 Add-TraySep
 
@@ -3083,21 +3765,27 @@ function Test-PointerInMenu($strip) {
     }
     return $false
 }
+# Vale para el menu de la bandeja y para el del pomodoro.
+$script:OpenMenu = $null
 $script:TrayMenuWatch = New-Object System.Windows.Threading.DispatcherTimer
 $script:TrayMenuWatch.Interval = [TimeSpan]::FromMilliseconds(60)
 $script:TrayMenuWatch.Add_Tick({
-    if (-not $trayMenu.Visible) { $script:TrayMenuWatch.Stop(); return }
+    $m = $script:OpenMenu
+    if (-not $m -or -not $m.Visible) { $script:TrayMenuWatch.Stop(); return }
     $esc = [AtalayaHotkey]::KeyDown(0x1B)
     $click = [AtalayaHotkey]::KeyDown(0x01) -or [AtalayaHotkey]::KeyDown(0x02) -or [AtalayaHotkey]::KeyDown(0x04)
-    if ($esc -or ($click -and -not (Test-PointerInMenu $trayMenu))) {
-        $trayMenu.Close([System.Windows.Forms.ToolStripDropDownCloseReason]::AppClicked)
+    if ($esc -or ($click -and -not (Test-PointerInMenu $m))) {
+        $m.Close([System.Windows.Forms.ToolStripDropDownCloseReason]::AppClicked)
     }
 })
-$trayMenu.Add_Opened({
+function Start-MenuWatch($m) {
     # Descarta pulsaciones previas (el bit "desde la ultima consulta")
     foreach ($vk in 0x01, 0x02, 0x04, 0x1B) { [void][AtalayaHotkey]::KeyDown($vk) }
+    $script:OpenMenu = $m
     $script:TrayMenuWatch.Start()
-})
+}
+$trayMenu.Add_Opened({ Start-MenuWatch $trayMenu })
+$script:PomoMenu.Add_Opened({ Start-MenuWatch $script:PomoMenu })
 
 # Clic simple = rescatar la pildora; doble clic = abrir el panel. Quien va al
 # icono suele ir por una de esas dos cosas.
@@ -3131,6 +3819,7 @@ $HotkeyHook = {
             13 { Move-CurrentDesktop 1 }
             14 { Toggle-Pill }
             15 { Toggle-PillCompact }
+            16 { Set-MeetingMode (-not $script:Meeting) }
         }
         $handled.Value = $true
     }
@@ -3150,14 +3839,15 @@ function Register-Hotkeys {
             @{ Id = 5; Spec = $Hotkeys.newDesktop;  Name = "escritorio nuevo" },
             @{ Id = 6; Spec = $Hotkeys.toggleDeck;  Name = "mostrar/ocultar deck" },
             @{ Id = 7; Spec = $Hotkeys.pinSession;  Name = "favorito de la ventana activa" },
-            @{ Id = 8; Spec = $Hotkeys.clearWindow; Name = "apartar ventana de la pildora" },
+            @{ Id = 8; Spec = $Hotkeys.clearWindow; Name = "apartar ventana de la píldora" },
             @{ Id = 9; Spec = $Hotkeys.pomodoro;    Name = "pomodoro iniciar/pausar" },
-            @{ Id = 10; Spec = $Hotkeys.recenterPill; Name = "recentrar la pildora" },
+            @{ Id = 10; Spec = $Hotkeys.recenterPill; Name = "recentrar la píldora" },
             @{ Id = 11; Spec = $Hotkeys.renameDesktop; Name = "renombrar el escritorio actual" },
             @{ Id = 12; Spec = $Hotkeys.moveDeskPrev; Name = "mover el escritorio a la izquierda" },
             @{ Id = 13; Spec = $Hotkeys.moveDeskNext; Name = "mover el escritorio a la derecha" },
-            @{ Id = 14; Spec = $Hotkeys.togglePill;   Name = "ocultar/mostrar la pildora" },
-            @{ Id = 15; Spec = $Hotkeys.compactPill;  Name = "pildora compacta/normal" }
+            @{ Id = 14; Spec = $Hotkeys.togglePill;   Name = "ocultar/mostrar la píldora" },
+            @{ Id = 15; Spec = $Hotkeys.compactPill;  Name = "píldora compacta/normal" },
+            @{ Id = 16; Spec = $Hotkeys.meetingMode;  Name = "modo reunión" }
         )
         foreach ($hk in $wanted) {
             $parsed = ConvertTo-Hotkey $hk.Spec
