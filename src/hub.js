@@ -485,6 +485,47 @@ function mapWindowsToDesktops(wins) {
   });
 }
 
+// El escritorio de cada sesión se anota al capturar su ventana, pero el
+// usuario puede mover la ventana a otro escritorio después. Se re-consulta
+// el escritorio de los hwnd de las sesiones vivas (pocos, una sola invocación)
+// y se corrige windows.json si cambió. Throttle: el HUD consulta cada pocos
+// segundos y dispara esto desde buildGlanceSummary.
+const SESSION_DESK_REFRESH_MS = 5000;
+let sessionDeskAt = 0;
+let sessionDeskBusy = false;
+
+function refreshSessionDesktops(sessions) {
+  if (process.platform !== "win32" || sessionDeskBusy) return;
+  if (Date.now() - sessionDeskAt < SESSION_DESK_REFRESH_MS) return;
+  const hwnds = [...new Set(sessions.map((s) => s.hwnd).filter(Boolean).map(Number))];
+  if (!hwnds.length || !fs.existsSync(VDESK_EXE)) return;
+  sessionDeskBusy = true;
+  sessionDeskAt = Date.now();
+  const wins = hwnds.map((hwnd) => ({ hwnd }));
+  mapWindowsToDesktops(wins).then(() => {
+    sessionDeskBusy = false;
+    const live = new Map();
+    for (const w of wins) if (Number.isInteger(w.desktop)) live.set(w.hwnd, w);
+    if (!live.size) return;
+    // Se relee el mapa: una captura pudo escribirlo mientras se consultaba
+    const map = loadWindows();
+    let changed = false;
+    for (const entry of Object.values(map)) {
+      const w = live.get(Number(entry.hwnd));
+      if (!w) continue;
+      if (entry.desktop !== w.desktop || (entry.desktopName || null) !== w.desktopName) {
+        entry.desktop = w.desktop;
+        entry.desktopName = w.desktopName;
+        changed = true;
+      }
+    }
+    if (changed) {
+      saveWindows(map);
+      scheduleBroadcast();
+    }
+  });
+}
+
 function jumpToWindow(hwnd, cb) {
   execFile(
     "powershell.exe",
@@ -818,6 +859,9 @@ async function buildGlanceSummary() {
   await refreshCurrentDesktop();
   const desks = await listDesktops();
   const payload = buildPayload();
+  // Ventanas movidas a otro escritorio: se corrige en segundo plano y el HUD
+  // lo verá en su próxima consulta
+  refreshSessionDesktops(payload.sessions);
   const summary = buildSummary(payload);
   summary.currentDesktop = currentDesktop;
   summary.desktopCount = desks ? desks.length : null;

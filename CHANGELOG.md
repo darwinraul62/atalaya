@@ -96,6 +96,11 @@ después de Atalaya se integran solos.
   barra.
 
 ### Corregido
+- **Una ventana movida a otro escritorio seguía contando en el anterior.** El
+  escritorio de cada sesión se anotaba solo al capturar su ventana. Ahora el
+  hub vuelve a consultar, como mucho cada 5 s y en una sola invocación, el
+  escritorio de las ventanas con sesión viva y corrige `windows.json` si
+  cambió; la barra acoplada, el deck y el panel lo reflejan en segundos.
 - **Sesiones con subagentes parecían paradas.** Si el agente principal lanzaba
   subagentes en segundo plano y terminaba su turno, la sesión pasaba a «lista»
   (y su escritorio sin ⚙) mientras los subagentes seguían trabajando. Ahora
