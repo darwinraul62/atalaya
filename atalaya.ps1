@@ -275,6 +275,43 @@ function Stop-Atalaya {
     if (-not $hudPid -and -not $hubPid) { Write-Host "Nada que detener." }
 }
 
+function Write-LauncherLog([string]$msg) {
+    try { Add-Content -Path (Join-Path $StateDir "hub.log") -Value "$(Get-Date -Format o) launcher: $msg" } catch { }
+}
+
+# Integracion automatica en cada arranque (incluido el de inicio de sesion):
+# un agente instalado DESPUES de Atalaya, o una version de Atalaya que necesita
+# eventos nuevos (p. ej. SubagentStart/SubagentStop en la 0.20.0), queda
+# integrado sin que el usuario tenga que acordarse de nada. integrate.mjs
+# --json solo consulta; si algo esta presente y sin integrar, se integra (con
+# copia de respaldo de la config del agente) y se avisa.
+# Solo Windows: preguntar a WSL despertaria cada distro en cada arranque. Para
+# WSL: atalaya -Integrate o bandeja > Mantenimiento > Reintegrar agentes.
+# Se desactiva con { "integration": { "auto": false } } en config.json.
+function Assert-AgentIntegration {
+    try {
+        $cfgPath = Join-Path $StateDir "config.json"
+        if (Test-Path $cfgPath) {
+            $c = Get-Content $cfgPath -Raw | ConvertFrom-Json
+            if ($c.integration -and $c.integration.auto -eq $false) { return }
+        }
+        if (-not (Get-Command node -ErrorAction SilentlyContinue)) { return }
+        # node escribe UTF-8; sin esto PowerShell 5.1 lo lee con la pagina de
+        # codigos de la consola y las tildes llegan rotas al log
+        [Console]::OutputEncoding = [Text.Encoding]::UTF8
+        $integ = Join-Path $RepoRoot "hooks\integrate.mjs"
+        $state = (& node $integ --json 2>$null | Out-String) | ConvertFrom-Json
+        $pending = @($state.agents | Where-Object { $_.present -and -not $_.installed })
+        if (-not $pending.Count) { return }
+        $names = ($pending | ForEach-Object { $_.name }) -join ", "
+        Write-Host "... Integrando agentes sin integrar o con hooks antiguos: $names"
+        $out = (& node $integ 2>&1 | Out-String).Trim() -replace "\r?\n", " | "
+        Write-LauncherLog "integracion automatica ($names): $out"
+        $o = [string][char]0xF3
+        Show-Toast "Atalaya integr$o $names" "Sus sesiones ya se ven en Atalaya. Para no hacerlo solo: Ajustes > Integraci$($o)n de agentes."
+    } catch { Write-LauncherLog "integracion automatica fallo: $_" }
+}
+
 function Show-Toast([string]$title, [string]$body) {
     $env:ATALAYA_TOAST_TITLE = $title
     $env:ATALAYA_TOAST_BODY = $body
@@ -520,6 +557,8 @@ function Invoke-WslIntegrate([string]$distro, [string[]]$flags) {
 }
 
 function Invoke-Integrate([string[]]$flags) {
+    # node escribe UTF-8: sin esto las tildes de sus mensajes salen rotas
+    try { [Console]::OutputEncoding = [Text.Encoding]::UTF8 } catch { }
     Write-Host "--- Windows:"
     & node (Join-Path $RepoRoot "hooks\integrate.mjs") @flags
     foreach ($d in Get-WslDistros) { Invoke-WslIntegrate $d $flags }
@@ -592,9 +631,14 @@ if ($InstallAutostart) {
 }
 
 if ($Integrate) {
+    # Tambien es la accion de emergencia de la bandeja y del panel (abren esta
+    # orden en una consola visible): Windows + cada distro de WSL.
     Invoke-Integrate @()
+    Write-LauncherLog "reintegracion manual (Windows + WSL) ejecutada"
     Write-Host ""
-    Write-Host "Listo. Las sesiones de agentes ya abiertas deben reiniciarse para tomar los hooks."
+    Write-Host "Listo. Las sesiones ya abiertas toman los hooks al momento en las versiones"
+    Write-Host "recientes de Claude Code; si alguna no aparece en Atalaya, reiniciala."
+    Write-Host "Si una distro de WSL fallo, el detalle esta arriba (atalaya -Doctor lo resume)."
     exit 0
 }
 
@@ -953,6 +997,7 @@ if ($Setup) {
 # Revision barata en cada arranque (incluido el automatico al iniciar sesion):
 # si Windows cambio de build, se rehace el binario de escritorios virtuales.
 Assert-VirtualDesktop
+Assert-AgentIntegration
 
 # workspaces.json local (no versionado) a partir del ejemplo
 $wsFile = Join-Path $RepoRoot "workspaces.json"

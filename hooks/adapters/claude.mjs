@@ -1,8 +1,8 @@
 /**
  * Atalaya — adaptador de Claude Code.
  *
- * Registra hooks/claude-hook.mjs en ~/.claude/settings.json para los cinco
- * eventos del ciclo de vida. Merge conservador: solo toca las entradas cuyo
+ * Registra hooks/claude-hook.mjs en ~/.claude/settings.json para los eventos
+ * del ciclo de vida de la sesión y de sus subagentes. Merge conservador: solo toca las entradas cuyo
  * comando apunta a claude-hook.mjs, respalda antes de escribir y preserva
  * todo lo demás.
  */
@@ -16,7 +16,12 @@ import { isWsl, winHomeFromWsl, backupFile } from "./common.mjs";
 export const id = "claude";
 export const name = "Claude Code";
 
-const EVENTS = ["SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd"];
+const EVENTS = [
+  "SessionStart", "UserPromptSubmit", "Notification", "Stop", "SessionEnd",
+  // Subagentes: sin ellos, una sesión cuyo principal espera a subagentes en
+  // segundo plano parecía "lista" mientras seguían trabajando
+  "SubagentStart", "SubagentStop",
+];
 const HOOK_MARKER = "claude-hook.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -124,7 +129,7 @@ export function install({ force = false } = {}) {
     ok: true,
     changed: true,
     detail: `hooks instalados en ${settingsPath} (comando: ${command}). ` +
-      "Las sesiones ya abiertas deben reiniciarse para tomarlos.",
+      "Las sesiones abiertas los toman al momento (Claude Code reciente); si alguna no aparece, reiníciala.",
   };
 }
 

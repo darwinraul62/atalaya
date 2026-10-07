@@ -36,8 +36,10 @@ Claude Code / Codex ──hooks──▶ ~/.atalaya/sessions/*.json ──▶ hu
 ```
 
 1. **Hooks** (`hooks/claude-hook.mjs`): registrados en `~/.claude/settings.json`
-   para `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop` y `SessionEnd`.
-   Cada evento actualiza la ficha JSON de la sesión. Desde WSL, el hook escribe
+   para `SessionStart`, `UserPromptSubmit`, `Notification`, `Stop`, `SessionEnd`,
+   `SubagentStart` y `SubagentStop`. Cada evento actualiza la ficha JSON de la
+   sesión (que guarda además un rastro de sus últimos 12 eventos, para
+   diagnosticar). Desde WSL, el hook escribe
    al `.atalaya` de Windows vía `/mnt/c` (variable `ATALAYA_DIR`).
 2. **Hub** (`src/hub.js`, sin dependencias): vigila la carpeta de estado, sirve
    el panel en `http://localhost:4777`, empuja cambios por SSE y dispara toasts
@@ -61,8 +63,20 @@ Claude Code / Codex ──hooks──▶ ~/.atalaya/sessions/*.json ──▶ hu
 | `UserPromptSubmit` | `working` | ⚙ Trabajando (captura el prompt como tarea) |
 | `Notification` | `needs_you` | 🔔 Te necesita (permiso o espera de respuesta) |
 | `Stop` | `ready` | ✓ Listo para revisar |
+| `Stop` con subagentes aún trabajando | `working` | ⚙ Trabajando · «N subagentes trabajando» |
+| `SubagentStart` | `working` | ⚙ Trabajando (aunque el principal ya hubiera parado) |
+| `SubagentStop` | (sin cambio) | el principal retoma y su `Stop` decide |
 | `SessionStart` | `idle` | · En espera |
 | `SessionEnd` | `closed` | desaparece |
+
+**Subagentes.** Cuando el agente principal lanza subagentes en segundo plano
+y termina su turno, la sesión **no** está lista: sigue en ⚙ hasta que el
+principal pare sin subagentes pendientes (lo dice el campo `background_tasks`
+del `Stop`). Cuentan subagentes, workflows y compañeros de equipo; un comando
+de consola en segundo plano (un servidor de desarrollo) no. Los avisos
+internos que despiertan al principal («un subagente terminó») no reemplazan
+la tarea de la sesión ni reasocian su ventana. Un subagente cuyo fin no se
+registró caduca a las 6 h.
 
 Las sesiones sin actividad por más de 12 h dejan de mostrarse; las fichas se
 purgan del disco a las 72 h.
@@ -394,14 +408,26 @@ con `atalaya -InstallAutostart` y se quita con `atalaya -Uninstall`.
 Comandos de mantenimiento:
 
 ```bat
-atalaya -Integrate    :: instalaste un agente DESPUES? re-escanea e integra
+atalaya -Integrate    :: reintegra Claude Code y Codex en Windows y cada WSL
 atalaya -Doctor       :: informe de salud: requisitos, procesos, integraciones
 atalaya -Check        :: consulta si hay version nueva (no toca nada)
 atalaya -Update       :: actualiza, recompila, reintegra y reinicia
 ```
 
-Las sesiones de agentes ya abiertas deben **reiniciarse** para tomar los
-hooks.
+**Integración automática.** En cada arranque Atalaya comprueba (en una
+décima de segundo) si Claude Code o Codex están instalados en Windows sin
+integrar o con hooks de una versión anterior, y los integra con copia de
+respaldo de su configuración, anotándolo en el log y avisando. Cubre el
+agente instalado **después** de Atalaya y los eventos nuevos que traiga una
+actualización. Se desactiva en *Ajustes → Integración de agentes*
+(`integration.auto: false`). WSL no se revisa al arrancar (despertaría cada
+distro); para eso está la acción de emergencia **Reintegrar agentes
+(Windows y WSL)** en la bandeja (*Mantenimiento*) y en Ajustes, que abre una
+consola con el detalle de cada entorno. Ajustes muestra además el estado de
+la integración en Windows.
+
+Las sesiones ya abiertas toman los hooks al momento en las versiones
+recientes de Claude Code; si alguna no aparece en Atalaya, reiníciala.
 
 ### Actualizarse
 
@@ -587,7 +613,7 @@ etiqueta informativa heredada (opcional).
   `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
   escritorio de cada sesión, `config.json` con los hotkeys y las preferencias
   — secciones `hotkeys`, `pill`, `bar`, `privacy`, `deck`, `pomodoro`,
-  `update` —,
+  `integration`, `update` —,
   `desknames.json` con los últimos nombres de escritorio que has usado (los
   que se ofrecen al renombrar), `update.json`
   con el resultado de la última consulta de versión, `hub.log`,

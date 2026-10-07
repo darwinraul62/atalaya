@@ -126,6 +126,7 @@
   .host { font-family: var(--mono); font-size: 10px; font-weight: 600; color: var(--chrome); border: 1px solid currentColor; border-radius: 4px; padding: 0 5px; }
   .task { color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
   .msg { color: var(--attn); font-size: 12px; font-weight: 600; }
+  .subagents { color: var(--work, #5b9cd9); font-size: 12px; overflow-wrap: anywhere; }
   .card-bottom { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .branch { font-family: var(--mono); font-size: 11px; color: var(--ink-2); background: var(--panel-2); border-radius: 5px; padding: 1px 7px; }
   button.jump {
@@ -332,6 +333,13 @@
       <label>Pomodoro: minutos de pausa larga <input id="setPomoLong" type="number" min="5" max="60" placeholder="15"></label>
       <label>Pomodoro: pausa larga cada (pomodoros) <input id="setPomoEvery" type="number" min="2" max="8" placeholder="4"></label>
     </div>
+    <h4>Integración de agentes</h4>
+    <div class="set-checks">
+      <label><input type="checkbox" id="setIntegAuto"> Integrar solo al arrancar Atalaya los agentes que instale después (Claude Code, Codex; en Windows), con copia de respaldo de su configuración</label>
+    </div>
+    <div id="integStatus" class="set-help">consultando…</div>
+    <p class="set-help"><button type="button" id="integRun">Reintegrar agentes ahora (Windows y WSL)</button>
+      — de emergencia: abre una consola con el detalle de cada entorno (útil sobre todo con WSL).</p>
     <h4>Actualizaciones</h4>
     <div class="set-checks">
       <label><input type="checkbox" id="setUpdateCheck"> Avisarme cuando haya una versión nueva (consulta al repositorio, sin instalar nada)</label>
@@ -489,6 +497,13 @@ function sessionCard(s) {
   card.append(top);
 
   if (s.task) card.append(el("div", "task", s.task));
+  if (s.subagentCount > 0) {
+    const n = s.subagentCount;
+    const names = (s.background || []).map((t) => t.description || t.type).filter(Boolean);
+    const sub = el("div", "subagents", `⚙ ${n} subagente${n === 1 ? "" : "s"} trabajando` + (names.length ? `: ${names.join(" · ")}` : ""));
+    sub.title = "Trabajo de subagentes en curso: la sesión no está lista hasta que terminen";
+    card.append(sub);
+  }
   if (s.status === "needs_you" && s.message) card.append(el("div", "msg", s.message));
 
   const bottom = el("div", "card-bottom");
@@ -880,6 +895,8 @@ settingsBtn.addEventListener("click", async () => {
     document.getElementById("setDockCounters").checked = !(cfg.bar && cfg.bar.counters === false);
     document.getElementById("setDockAlign").value = (cfg.bar && cfg.bar.align) || "start";
     document.getElementById("setMeeting").checked = !!(cfg.privacy && cfg.privacy.meeting);
+    document.getElementById("setIntegAuto").checked = !(cfg.integration && cfg.integration.auto === false);
+    loadIntegration();
     // Sin la clave, el valor por defecto es comprobar (opt-out, no opt-in)
     document.getElementById("setUpdateCheck").checked = !(cfg.update && cfg.update.check === false);
     document.getElementById("setUpdateHours").value = (cfg.update && cfg.update.intervalHours) || 12;
@@ -888,6 +905,30 @@ settingsBtn.addEventListener("click", async () => {
   settingsEl.showModal();
 });
 document.getElementById("setClose").addEventListener("click", () => settingsEl.close());
+
+// Estado de la integración (solo el entorno Windows; WSL se ve al reintegrar)
+async function loadIntegration() {
+  const box = document.getElementById("integStatus");
+  try {
+    const r = await fetch("/api/integration");
+    const st = await r.json();
+    box.textContent = (st.agents || []).map((a) =>
+      `${a.installed ? "✓" : a.present ? "✗" : "–"} ${a.name}: ` +
+      (a.installed ? "integrado" : a.present ? "detectado SIN integrar" : "no instalado")
+    ).join(" · ") || "sin datos";
+  } catch {
+    box.textContent = "no se pudo consultar (¿hub caído?)";
+  }
+}
+document.getElementById("integRun").addEventListener("click", async () => {
+  const box = document.getElementById("integStatus");
+  try {
+    await postJson("/api/integration/run", {});
+    box.textContent = "reintegrando en una consola aparte… (al terminar, vuelve a abrir Ajustes para ver el estado)";
+  } catch {
+    box.textContent = "no se pudo lanzar la reintegración";
+  }
+});
 
 // Abrir directo en Ajustes cuando se lanza con .../#ajustes (lo usa la opción
 // "Ajustes" del menú de la bandeja del sistema).
@@ -923,13 +964,14 @@ document.getElementById("setSave").addEventListener("click", async () => {
     every: Number(document.getElementById("setPomoEvery").value) || 4,
     sound: document.getElementById("setPomoSound").checked,
   };
+  const integration = { auto: document.getElementById("setIntegAuto").checked };
   const update = {
     check: document.getElementById("setUpdateCheck").checked,
     intervalHours: Number(document.getElementById("setUpdateHours").value) || 12,
   };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill, bar, privacy, deck, pomodoro, update });
+    const r = await postJson("/api/config", { hotkeys, pill, bar, privacy, deck, pomodoro, integration, update });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";

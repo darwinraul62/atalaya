@@ -905,8 +905,10 @@ function checkTransitions(payload) {
     const prev = prevStatus.get(s.sessionId);
     prevStatus.set(s.sessionId, s.status);
     if (!prev || prev === s.status) continue;
-    // Acaba de recibir un prompt: la ventana activa es la de esta sesión
-    if (s.status === "working") toCapture.push(s.sessionId);
+    // Acaba de recibir un prompt: la ventana activa es la de esta sesión. SOLO
+    // con un prompt: si pasa a "working" porque arrancó un subagente, el
+    // usuario puede estar en cualquier otra ventana.
+    if (s.status === "working" && s.lastEvent === "UserPromptSubmit") toCapture.push(s.sessionId);
     if (s.status !== "needs_you" && s.status !== "ready") continue;
     if (now - (lastToast.get(s.sessionId) || 0) < 15e3) continue;
     lastToast.set(s.sessionId, now);
@@ -1168,6 +1170,36 @@ const server = http.createServer(async (req, res) => {
     return checkUpdate((info) => json(res, 200, { ...info, version: VERSION }));
   }
 
+  // Integración de agentes: estado (solo consulta) y reintegración de
+  // emergencia en una consola VISIBLE (Windows + cada distro de WSL), para
+  // que el usuario vea qué falla en cada entorno.
+  if (route === "GET /api/integration") {
+    execFile(process.execPath, [path.join(REPO_ROOT, "hooks", "integrate.mjs"), "--json"],
+      { windowsHide: true, timeout: 15000 }, (err, stdout) => {
+        try {
+          return json(res, 200, JSON.parse(stdout));
+        } catch {
+          return json(res, 500, { error: err ? err.message : "respuesta ilegible" });
+        }
+      });
+    return;
+  }
+  if (route === "POST /api/integration/run") {
+    if (process.platform !== "win32") return json(res, 409, { error: "solo Windows" });
+    // "start" de cmd necesita el título entre comillas tal cual: la línea se
+    // arma a mano (windowsVerbatimArguments) porque Node reescaparía esas
+    // comillas y start tomaría el comando por el título.
+    const script = path.join(REPO_ROOT, "atalaya.ps1");
+    const line = `/d /s /c start "Atalaya - reintegrar agentes" powershell.exe -NoProfile ` +
+      `-ExecutionPolicy Bypass -NoExit -File "${script}" -Integrate`;
+    const child = spawn("cmd.exe", [line], {
+      detached: true, stdio: "ignore", windowsHide: true, windowsVerbatimArguments: true,
+    });
+    child.unref();
+    log("reintegración manual lanzada");
+    return json(res, 200, { ok: true });
+  }
+
   if (route === "POST /api/update/run") {
     if (process.platform !== "win32") return json(res, 409, { error: "solo Windows" });
     // Se responde ANTES de lanzar: el actualizador mata este proceso enseguida
@@ -1270,6 +1302,10 @@ const server = http.createServer(async (req, res) => {
         cfg.pomodoro.every = Number.isInteger(n) && n >= 2 && n <= 8 ? n : 4;
       }
       if (body.pomodoro.sound !== undefined) cfg.pomodoro.sound = !!body.pomodoro.sound;
+    }
+    if (body.integration && typeof body.integration === "object") {
+      cfg.integration = { ...cfg.integration };
+      if (body.integration.auto !== undefined) cfg.integration.auto = !!body.integration.auto;
     }
     if (body.update && typeof body.update === "object") {
       cfg.update = { ...cfg.update };

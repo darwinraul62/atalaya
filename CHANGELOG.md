@@ -9,7 +9,9 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 Los escritorios también se pueden manejar desde la barra de tareas o desde
 una barra acoplada a un borde, para quien prefiere no tener la píldora encima
 de su trabajo. La barra acoplada trae además pomodoro y controles de música,
-y un modo reunión oculta lo privado antes de compartir pantalla.
+y un modo reunión oculta lo privado antes de compartir pantalla. Las sesiones
+que esperan a subagentes ya no parecen paradas, y los agentes instalados
+después de Atalaya se integran solos.
 
 ### Añadido
 - **Escritorios en la barra de tareas** (opcional: bandeja → *Mostrar*, o
@@ -62,6 +64,16 @@ y un modo reunión oculta lo privado antes de compartir pantalla.
 - **Modo reunión** (`Ctrl+Alt+M`, ojo 👁 en la barra, bandeja o Ajustes;
   `privacy.meeting`): oculta nombres de escritorios, pomodoro y título de la
   canción; el pomodoro sigue contando sin sonido ni avisos.
+- **Integración automática de agentes** al arrancar (Windows): si Claude
+  Code o Codex están sin integrar o con hooks de una versión anterior, se
+  integran con copia de respaldo, se anota en el log y se avisa
+  (`integration.auto`, desactivable en Ajustes). Cubre agentes instalados
+  después de Atalaya y eventos nuevos de una actualización.
+- **Reintegrar agentes (Windows y WSL)**: acción de emergencia en la bandeja
+  (*Mantenimiento*) y en Ajustes; abre una consola con el detalle de cada
+  entorno. Ajustes muestra el estado de la integración.
+- **Rastro de eventos** en la ficha de cada sesión (los últimos 12), para
+  diagnosticar por qué quedó en un estado.
 - **Posición de los escritorios** en la barra acoplada (`bar.align`:
   inicio, centro o final) y contadores opcionales (`bar.counters`).
 
@@ -84,6 +96,13 @@ y un modo reunión oculta lo privado antes de compartir pantalla.
   barra.
 
 ### Corregido
+- **Sesiones con subagentes parecían paradas.** Si el agente principal lanzaba
+  subagentes en segundo plano y terminaba su turno, la sesión pasaba a «lista»
+  (y su escritorio sin ⚙) mientras los subagentes seguían trabajando. Ahora
+  se escuchan `SubagentStart`/`SubagentStop` y el campo `background_tasks` del
+  `Stop`: la sesión sigue en ⚙ hasta que no queda ningún subagente, y el panel
+  muestra «N subagentes trabajando». Los avisos internos que despiertan al
+  principal ya no reemplazan la tarea ni reasocian la ventana de la sesión.
 - **El menú de la bandeja no se cerraba** sin elegir una acción: es de
   WinForms y depende de un filtro de mensajes que solo existe con el bucle de
   WinForms, y el HUD corre sobre el de WPF. Ahora se cierra con Esc o con un

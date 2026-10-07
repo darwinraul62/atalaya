@@ -3741,6 +3741,9 @@ $script:TrayMaint = $smMaint
 # El texto cambia solo cuando el hub detecta version nueva (ver Update-TrayStatus)
 $script:TrayUpdate = Add-TrayItem "Buscar actualizaciones" "" { Invoke-UpdateAction } $smMaint
 $null = Add-TrayItem "Reiniciar el HUD" "" { Invoke-HubPost "/api/hud/restart" "{}" } $smMaint
+# Emergencia: abre una consola con el detalle (sobre todo para WSL, que la
+# integración automática del arranque no toca)
+$null = Add-TrayItem "Reintegrar agentes (Windows y WSL)..." "" { Invoke-HubPost "/api/integration/run" "{}" } $smMaint
 $null = Add-TrayItem "Cerrar el HUD (el hub sigue)" "" { $window.Close() } $smMaint
 $null = Add-TrayItem "Salir de Atalaya" "" { Exit-Atalaya }
 
