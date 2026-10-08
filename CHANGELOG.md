@@ -6,6 +6,30 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 
 ## [Sin publicar]
 
+## [0.21.0] - 2026-10-08
+
+Atalaya muestra cuánto llevas gastado de los límites de uso de Claude Code y
+Codex (ventana de 5 horas y semanal) y cuándo se reinicia cada uno, en la
+barra acoplada, la píldora, el deck y el panel, y avisa antes de que se
+agoten. Funciona en cualquier instalación: si no tenías statusline en Claude
+Code, Atalaya pone la suya; si ya tenías una, la respeta.
+
+### Añadido
+- **Medidores de los límites de uso de Claude Code y Codex** (ventana de 5 h
+  y semanal de la suscripción) en la barra acoplada, la píldora (solo al pasar
+  el umbral, configurable), el deck y el panel, con la hora de reinicio y la
+  antigüedad del dato. Notificación al cruzar el 80 % y el 95 % (una vez por
+  ventana) y al reiniciarse una ventana agotada. Ajustes → *Límites de uso*.
+- **Tarjeta de límites** al pasar el ratón sobre los medidores de la barra
+  acoplada o de la píldora (clic = dejarla fija): el mismo detalle que el
+  panel, con la hora exacta de cada reinicio, en lugar de un tooltip.
+- **Statusline de Atalaya para Claude Code**, único sitio por el que Claude
+  Code entrega esos límites. Si ya había una, se encadena sin cambiar lo que
+  se ve y se restaura al desinstalar; se puede desactivar.
+- Codex: el notificador guarda los límites que Codex anota en su bitácora de
+  sesión (también desde WSL) y el hub vigila la de Windows.
+- `GET /api/limits` y `limits` en `/api/summary` y en el SSE.
+
 ### Corregido
 - **Alertas fantasma tras reiniciar el equipo.** Si Windows se apagaba con una
   sesión esperándole, el agente nunca avisaba de su cierre y, al volver, su

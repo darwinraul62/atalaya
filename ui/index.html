@@ -162,6 +162,30 @@
     border-radius: 6px; padding: 6px 12px; font: 600 12.5px var(--ui); cursor: pointer;
   }
   .note-form button:hover { border-color: var(--chrome); color: var(--chrome); }
+  /* Límites de uso: número y glifo además del color (tema daltonized) */
+  .limits { display: flex; flex-wrap: wrap; gap: 10px; margin: 14px 0 0; }
+  .limits:empty { display: none; }
+  .lim {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 8px;
+    box-shadow: var(--shadow); padding: 8px 12px; min-width: 260px; flex: 0 1 340px;
+  }
+  .lim.stale { opacity: .7; }
+  .lim-head { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; margin-bottom: 4px; }
+  .lim-head strong { font-weight: 650; }
+  .lim-head .meta { margin-left: auto; color: var(--ink-3); font-family: var(--mono); font-size: 11px; }
+  .lim-row { display: grid; grid-template-columns: 34px 1fr 52px auto; align-items: center; gap: 8px;
+    font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; padding: 2px 0; }
+  .lim-row .lbl { color: var(--ink-2); }
+  .lim-row .pct { text-align: right; font-weight: 600; }
+  .lim-row .eta { color: var(--ink-3); font-size: 11px; min-width: 64px; }
+  .lim-track { height: 7px; border-radius: 4px; background: var(--panel-2); border: 1px solid var(--line); overflow: hidden; }
+  .lim-fill { height: 100%; background: var(--ready); }
+  .lim-row.warn .lim-fill { background: var(--attn); }
+  .lim-row.warn .pct { color: var(--attn); }
+  .lim-row.crit .lim-fill { background: #c4453c; }
+  .lim-row.crit .pct { color: #c4453c; }
+  .lim-row.expired .pct { color: var(--ink-3); font-weight: 400; }
+  .lim-reached { color: #c4453c; font-size: 11.5px; margin-top: 2px; }
   .updated { margin-top: 20px; color: var(--ink-3); font-size: 11.5px; font-family: var(--mono); }
 
   #settings {
@@ -221,6 +245,7 @@
 </header>
 
 <div class="frame">
+  <section class="limits" id="limits" aria-label="Límites de uso de los agentes"></section>
   <div class="desktops" id="board"></div>
 
   <dialog id="settings">
@@ -333,6 +358,26 @@
       <label>Pomodoro: minutos de pausa larga <input id="setPomoLong" type="number" min="5" max="60" placeholder="15"></label>
       <label>Pomodoro: pausa larga cada (pomodoros) <input id="setPomoEvery" type="number" min="2" max="8" placeholder="4"></label>
     </div>
+    <h4>Límites de uso (Claude Code y Codex)</h4>
+    <div class="set-checks">
+      <label><input type="checkbox" id="setLimEnabled"> Mostrar los medidores de límites (ventana de 5 h y semanal de la suscripción)</label>
+      <label><input type="checkbox" id="setLimStatusline"> Claude Code: usar la statusline para leerlos (si ya tenías una, Atalaya la encadena sin cambiar lo que ves; desmarcado = sin medidor de Claude)</label>
+      <label><input type="checkbox" id="setDockLimits"> Medidores en la barra acoplada</label>
+    </div>
+    <div class="set-grid">
+      <label>Medidores en la píldora
+        <select id="setPillLimits">
+          <option value="threshold">solo al pasar el primer umbral</option>
+          <option value="always">siempre</option>
+          <option value="off">nunca</option>
+        </select>
+      </label>
+      <label>Avisar al llegar a (%) <input id="setLimWarn1" type="number" min="10" max="100" step="5" placeholder="80"></label>
+      <label>Aviso urgente al llegar a (%) <input id="setLimWarn2" type="number" min="10" max="100" step="5" placeholder="95"></label>
+    </div>
+    <p class="set-help">Claude Code solo los informa con suscripción Pro o Max, en la terminal y
+      mientras hay una sesión abierta; Codex los anota en su bitácora de sesión. Cada medidor
+      muestra la antigüedad de su dato.</p>
     <h4>Integración de agentes</h4>
     <div class="set-checks">
       <label><input type="checkbox" id="setIntegAuto"> Integrar solo al arrancar Atalaya los agentes que instale después (Claude Code, Codex; en Windows), con copia de respaldo de su configuración</label>
@@ -365,7 +410,7 @@
 
 // Debe coincidir con VERSION en src/hub.js: si el hub anuncia otra versión,
 // esta página está obsoleta y se recarga sola (una vez por versión).
-const UI_VERSION = "0.20.0";
+const UI_VERSION = "0.21.0";
 
 const STATUS = {
   needs_you: { glyph: "🔔", label: "Te necesita" },
@@ -895,6 +940,14 @@ settingsBtn.addEventListener("click", async () => {
     document.getElementById("setDockCounters").checked = !(cfg.bar && cfg.bar.counters === false);
     document.getElementById("setDockAlign").value = (cfg.bar && cfg.bar.align) || "start";
     document.getElementById("setMeeting").checked = !!(cfg.privacy && cfg.privacy.meeting);
+    const lim = cfg.limits || {};
+    document.getElementById("setLimEnabled").checked = lim.enabled !== false;
+    document.getElementById("setLimStatusline").checked = lim.statusline !== false;
+    document.getElementById("setDockLimits").checked = !(cfg.bar && cfg.bar.limits === false);
+    document.getElementById("setPillLimits").value = (cfg.pill && cfg.pill.limits) || "threshold";
+    const warn = Array.isArray(lim.warnAt) && lim.warnAt.length ? lim.warnAt : [80, 95];
+    document.getElementById("setLimWarn1").value = warn[0];
+    document.getElementById("setLimWarn2").value = warn[warn.length - 1];
     document.getElementById("setIntegAuto").checked = !(cfg.integration && cfg.integration.auto === false);
     loadIntegration();
     // Sin la clave, el valor por defecto es comprobar (opt-out, no opt-in)
@@ -945,6 +998,7 @@ document.getElementById("setSave").addEventListener("click", async () => {
     dim: document.getElementById("setDim").value,
     layout: document.getElementById("setLayout").value,
     taskbar: document.getElementById("setTaskbar").checked,
+    limits: document.getElementById("setPillLimits").value,
   };
   const deck = { open: document.getElementById("setDeckOpen").value };
   const bar = {
@@ -954,6 +1008,15 @@ document.getElementById("setSave").addEventListener("click", async () => {
     musicTitle: document.getElementById("setDockMusicTitle").checked,
     counters: document.getElementById("setDockCounters").checked,
     align: document.getElementById("setDockAlign").value,
+    limits: document.getElementById("setDockLimits").checked,
+  };
+  const limits = {
+    enabled: document.getElementById("setLimEnabled").checked,
+    statusline: document.getElementById("setLimStatusline").checked,
+    warnAt: [
+      Number(document.getElementById("setLimWarn1").value) || 80,
+      Number(document.getElementById("setLimWarn2").value) || 95,
+    ],
   };
   const privacy = { meeting: document.getElementById("setMeeting").checked };
   const pomodoro = {
@@ -971,7 +1034,7 @@ document.getElementById("setSave").addEventListener("click", async () => {
   };
   status.textContent = "guardando…";
   try {
-    const r = await postJson("/api/config", { hotkeys, pill, bar, privacy, deck, pomodoro, integration, update });
+    const r = await postJson("/api/config", { hotkeys, pill, bar, privacy, deck, pomodoro, integration, update, limits });
     if (!r.ok) throw new Error();
     await postJson("/api/hud/restart", {});
     status.textContent = "✓ guardado; HUD reiniciándose";
@@ -988,6 +1051,7 @@ window.addEventListener("focus", async () => {
     const r = await fetch("/api/sessions");
     state = await r.json();
     render();
+    renderLimits();
   } catch { /* SSE sigue mandando */ }
   if (viewAll) fetchDeskInfo();
   fetchDesktops();
@@ -1022,6 +1086,85 @@ updateBtn.addEventListener("click", async () => {
   setTimeout(() => { updating = false; updateBtn.disabled = false; }, 60000);
 });
 
+// ── Límites de uso ──────────────────────────────────────────────────────────
+// El hub manda la última muestra de cada agente; la antigüedad y el tiempo
+// hasta el reinicio se recalculan aquí cada minuto, sin esperar eventos.
+const limitsEl = document.getElementById("limits");
+
+function fmtSpan(ms) {
+  const min = Math.max(0, Math.round(ms / 60000));
+  if (min < 60) return `${min} min`;
+  if (min < 1440) return `${Math.floor(min / 60)} h ${String(min % 60).padStart(2, "0")}`;
+  const d = Math.floor(min / 1440);
+  const h = Math.floor((min % 1440) / 60);
+  return h ? `${d} d ${h} h` : `${d} d`;
+}
+
+function renderLimits() {
+  const lim = state && state.limits;
+  limitsEl.replaceChildren();
+  if (!lim || !lim.enabled) return;
+  const now = Date.now();
+  const top = lim.warnAt[lim.warnAt.length - 1];
+  for (const a of lim.agents) {
+    const age = now - a.observedAt;
+    const card = document.createElement("div");
+    card.className = "lim" + (age > 30 * 60e3 ? " stale" : "");
+    const head = document.createElement("div");
+    head.className = "lim-head";
+    const name = document.createElement("strong");
+    name.textContent = a.name;
+    head.append(name);
+    if (a.plan) {
+      const plan = document.createElement("span");
+      plan.className = "meta";
+      plan.style.marginLeft = "0";
+      plan.textContent = a.plan;
+      head.append(plan);
+    }
+    const meta = document.createElement("span");
+    meta.className = "meta";
+    meta.textContent = age < 90e3 ? "dato al día" : `dato de hace ${fmtSpan(age)}`;
+    meta.title = new Date(a.observedAt).toLocaleString();
+    head.append(meta);
+    card.append(head);
+    for (const w of a.windows) {
+      const expired = w.expired || (w.resetsAt && w.resetsAt <= now);
+      const pct = expired ? null : w.usedPct;
+      const level = pct === null ? "expired" : pct >= top ? "crit" : pct >= lim.warnAt[0] ? "warn" : "ok";
+      const row = document.createElement("div");
+      row.className = "lim-row " + level;
+      const lbl = document.createElement("span");
+      lbl.className = "lbl";
+      lbl.textContent = w.label;
+      const track = document.createElement("div");
+      track.className = "lim-track";
+      const fill = document.createElement("div");
+      fill.className = "lim-fill";
+      fill.style.width = (pct || 0) + "%";
+      track.append(fill);
+      const p = document.createElement("span");
+      p.className = "pct";
+      p.textContent = pct === null ? "—" : (level === "crit" ? "⛔" : level === "warn" ? "▲" : "") + pct + "%";
+      const eta = document.createElement("span");
+      eta.className = "eta";
+      eta.textContent = expired ? "↻ reiniciada" : w.resetsAt ? `↻ ${fmtSpan(w.resetsAt - now)}` : "";
+      if (w.resetsAt) eta.title = "Se reinicia: " + new Date(w.resetsAt).toLocaleString();
+      row.title = `Ventana ${w.label}: ${pct === null ? "reiniciada, sin dato nuevo" : pct + "% usado"}`;
+      row.append(lbl, track, p, eta);
+      card.append(row);
+    }
+    if (a.reached) {
+      const r = document.createElement("div");
+      r.className = "lim-reached";
+      r.textContent = "⛔ límite alcanzado";
+      card.append(r);
+    }
+    limitsEl.append(card);
+  }
+}
+setInterval(renderLimits, 60e3);
+
 function connect() {
   const es = new EventSource("/events");
   es.onmessage = (e) => {
@@ -1037,6 +1180,7 @@ function connect() {
       }
       renderUpdate(state.update);
       render();
+      renderLimits();
     } catch { /* frame corrupto */ }
   };
   es.onerror = () => {

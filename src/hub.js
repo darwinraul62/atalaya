@@ -21,8 +21,11 @@ import os from "node:os";
 import crypto from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import {
+  limitsDir, readLimit, writeLimit, latestCodexRollout, readCodexRollout,
+} from "../hooks/lib/limits.mjs";
 
-const VERSION = "0.20.0";
+const VERSION = "0.21.0";
 const PORT = Number(process.env.ATALAYA_PORT || 4777);
 
 const REPO_ROOT = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -836,6 +839,7 @@ function buildPayload() {
     // El panel se auto-recarga cuando el hub cambia de versión (JS obsoleto)
     hubVersion: VERSION,
     update: updateInfo,
+    limits: buildLimits(),
   };
 }
 
@@ -858,6 +862,7 @@ function buildSummary(payload) {
     update: updateInfo.available
       ? { available: true, behind: updateInfo.behind, tag: updateInfo.tag }
       : null,
+    limits: payload.limits,
   };
 }
 
@@ -977,6 +982,153 @@ function checkTransitions(payload) {
   if (toCapture.length) captureWindowContext(toCapture);
 }
 
+// ── Límites de uso de los agentes ───────────────────────────────────────────
+// Los recolectores (hooks/claude-statusline.mjs y hooks/codex-notify.mjs)
+// dejan una muestra por agente en ~/.atalaya/limits/. El hub, además, mira
+// por su cuenta el ~/.codex de Windows para tener dato sin esperar a que
+// termine un turno. Aquí se calcula la antigüedad, el nivel de cada ventana
+// y se avisa con un toast al cruzar los umbrales (una vez por ventana).
+
+const LIMITS_DIR = limitsDir(STATE_DIR);
+const LIMIT_AGENTS = [
+  ["claude", "Claude"],
+  ["codex", "Codex"],
+];
+const LIMIT_ALERTS_FILE = path.join(LIMITS_DIR, "alerts.json");
+const LIMIT_STALE_MS = 30 * 60e3; // más viejo que esto: se muestra atenuado
+
+function limitsConfig() {
+  const cfg = readConfig().limits || {};
+  let warnAt = Array.isArray(cfg.warnAt) ? cfg.warnAt.map(Number) : [80, 95];
+  warnAt = warnAt.filter((n) => Number.isFinite(n) && n > 0 && n <= 100).sort((a, b) => a - b);
+  if (!warnAt.length) warnAt = [80, 95];
+  return { enabled: cfg.enabled !== false, warnAt };
+}
+
+function limitLevel(pct, warnAt) {
+  if (pct >= warnAt[warnAt.length - 1]) return "crit";
+  if (pct >= warnAt[0]) return "warn";
+  return "ok";
+}
+
+function buildLimits() {
+  const { enabled, warnAt } = limitsConfig();
+  if (!enabled) return { enabled: false, warnAt, agents: [] };
+  const now = Date.now();
+  const agents = [];
+  for (const [agent, name] of LIMIT_AGENTS) {
+    const s = readLimit(STATE_DIR, agent);
+    if (!s) continue;
+    const windows = s.windows.map((w) => {
+      // Pasada la hora de reinicio el porcentaje guardado ya no vale: la
+      // ventana empezó de cero y no hay dato nuevo hasta que el agente hable.
+      const expired = !!(w.resetsAt && w.resetsAt <= now);
+      return {
+        id: w.id,
+        label: w.label,
+        usedPct: expired ? null : Math.round(w.usedPct),
+        resetsAt: w.resetsAt || null,
+        expired,
+        level: expired ? "ok" : limitLevel(w.usedPct, warnAt),
+      };
+    });
+    const live = windows.filter((w) => w.usedPct !== null);
+    const worst = live.sort((a, b) => b.usedPct - a.usedPct)[0] || null;
+    agents.push({
+      agent,
+      name,
+      observedAt: s.observedAt,
+      ageMs: now - s.observedAt,
+      stale: now - s.observedAt > LIMIT_STALE_MS,
+      plan: s.plan || null,
+      reached: s.reached || null,
+      windows,
+      worst: worst ? { id: worst.id, label: worst.label, usedPct: worst.usedPct, level: worst.level } : null,
+    });
+  }
+  return { enabled: true, warnAt, agents };
+}
+
+let limitAlerts = {};
+try {
+  limitAlerts = JSON.parse(fs.readFileSync(LIMIT_ALERTS_FILE, "utf8")) || {};
+} catch {
+  /* sin avisos previos */
+}
+
+function fmtReset(ms) {
+  if (!ms) return "";
+  const d = new Date(ms);
+  const sameDay = d.toDateString() === new Date().toDateString();
+  const hm = d.toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" });
+  return sameDay ? `hoy a las ${hm}` : `${d.toLocaleDateString("es", { weekday: "long" })} a las ${hm}`;
+}
+
+// Un aviso por umbral y ventana: la clave lleva la hora de reinicio, que es
+// lo que identifica a cada ventana. Se guardan en disco para no repetirlos
+// al reiniciar el hub, y se podan las de ventanas ya vencidas.
+function checkLimitAlerts(limits) {
+  if (!limits.enabled) return;
+  const now = Date.now();
+  let dirty = false;
+  for (const a of limits.agents) {
+    for (const w of a.windows) {
+      const base = `${a.agent}:${w.id}:${w.resetsAt || 0}`;
+      if (w.expired) {
+        // Se llegó al tope y la ventana ya se reinició: se puede volver a usar
+        if (limitAlerts[`${base}:full`] && !limitAlerts[`${base}:reset`]) {
+          limitAlerts[`${base}:reset`] = now;
+          dirty = true;
+          showToast(`${a.name}: límite ${w.label} reiniciado`, "Ya puede volver a usarlo.");
+        }
+        continue;
+      }
+      const crossed = limits.warnAt.filter((t) => w.usedPct >= t).pop();
+      if (w.usedPct >= 100 && !limitAlerts[`${base}:full`]) {
+        limitAlerts[`${base}:full`] = now;
+        dirty = true;
+      }
+      if (crossed === undefined || limitAlerts[`${base}:${crossed}`]) continue;
+      // Se marca también todo umbral inferior: no avisar del 80 después del 95
+      for (const t of limits.warnAt) if (t <= crossed) limitAlerts[`${base}:${t}`] = now;
+      dirty = true;
+      showToast(
+        `${a.name}: ${w.usedPct}% del límite ${w.label}`,
+        w.resetsAt ? `Se reinicia ${fmtReset(w.resetsAt)}.` : "Vaya con cuidado con el uso.",
+      );
+    }
+  }
+  for (const [k, at] of Object.entries(limitAlerts)) {
+    if (now - at > 8 * 86400e3) {
+      delete limitAlerts[k];
+      dirty = true;
+    }
+  }
+  if (dirty) {
+    try {
+      fs.mkdirSync(LIMITS_DIR, { recursive: true });
+      fs.writeFileSync(LIMIT_ALERTS_FILE, JSON.stringify(limitAlerts, null, 2));
+    } catch {
+      /* sin persistencia: como mucho, un aviso repetido */
+    }
+  }
+}
+
+// Codex de Windows: solo se relee el rollout cuando cambia su fecha de
+// modificación, así que el sondeo cuesta un par de listados de carpeta.
+let codexPollMtime = 0;
+function pollCodexLimits() {
+  if (!limitsConfig().enabled) return;
+  try {
+    const latest = latestCodexRollout();
+    if (!latest || latest.mtimeMs === codexPollMtime) return;
+    codexPollMtime = latest.mtimeMs;
+    writeLimit(STATE_DIR, readCodexRollout(latest.file), "windows");
+  } catch (e) {
+    log(`límites de Codex: ${e.message}`);
+  }
+}
+
 // ── SSE ─────────────────────────────────────────────────────────────────────
 
 const sseClients = new Set();
@@ -989,6 +1141,7 @@ function scheduleBroadcast() {
     await refreshCurrentDesktop();
     const payload = buildPayload();
     checkTransitions(payload);
+    checkLimitAlerts(payload.limits);
     const frame = `data: ${JSON.stringify(payload)}\n\n`;
     for (const res of sseClients) {
       try {
@@ -1005,6 +1158,14 @@ function watchState() {
     fs.watch(SESSIONS_DIR, scheduleBroadcast);
   } catch (e) {
     log(`watch sessions error: ${e.message}`);
+  }
+  try {
+    fs.mkdirSync(LIMITS_DIR, { recursive: true });
+    fs.watch(LIMITS_DIR, (evt, name) => {
+      if (name && name.endsWith(".json") && name !== "alerts.json") scheduleBroadcast();
+    });
+  } catch (e) {
+    log(`watch limits error: ${e.message}`);
   }
   try {
     // notes.json y config viven en STATE_DIR
@@ -1118,6 +1279,10 @@ const server = http.createServer(async (req, res) => {
 
   if (route === "GET /api/summary") {
     return json(res, 200, await buildGlanceSummary());
+  }
+
+  if (route === "GET /api/limits") {
+    return json(res, 200, buildLimits());
   }
 
   if (route === "GET /api/desktops") {
@@ -1306,6 +1471,10 @@ const server = http.createServer(async (req, res) => {
       if (body.pill.taskbar !== undefined) {
         cfg.pill.taskbar = !!body.pill.taskbar;
       }
+      if (body.pill.limits !== undefined) {
+        const v = String(body.pill.limits);
+        cfg.pill.limits = ["always", "threshold", "off"].includes(v) ? v : "threshold";
+      }
     }
     if (body.bar && typeof body.bar === "object") {
       cfg.bar = { ...cfg.bar };
@@ -1320,9 +1489,25 @@ const server = http.createServer(async (req, res) => {
       if (body.bar.music !== undefined) cfg.bar.music = !!body.bar.music;
       if (body.bar.musicTitle !== undefined) cfg.bar.musicTitle = !!body.bar.musicTitle;
       if (body.bar.counters !== undefined) cfg.bar.counters = !!body.bar.counters;
+      if (body.bar.limits !== undefined) cfg.bar.limits = !!body.bar.limits;
       if (body.bar.align !== undefined) {
         const v = String(body.bar.align);
         cfg.bar.align = ["start", "center", "end"].includes(v) ? v : "start";
+      }
+    }
+    let reintegrate = false;
+    if (body.limits && typeof body.limits === "object") {
+      cfg.limits = { ...cfg.limits };
+      if (body.limits.enabled !== undefined) cfg.limits.enabled = !!body.limits.enabled;
+      if (body.limits.statusline !== undefined) {
+        const v = !!body.limits.statusline;
+        reintegrate = v !== (cfg.limits.statusline !== false);
+        cfg.limits.statusline = v;
+      }
+      if (Array.isArray(body.limits.warnAt)) {
+        const t = body.limits.warnAt.map(Number)
+          .filter((n) => Number.isInteger(n) && n >= 10 && n <= 100).sort((a, b) => a - b);
+        cfg.limits.warnAt = t.length ? [...new Set(t)].slice(0, 3) : [80, 95];
       }
     }
     if (body.privacy && typeof body.privacy === "object") {
@@ -1371,6 +1556,14 @@ const server = http.createServer(async (req, res) => {
     }
     try {
       fs.writeFileSync(CONFIG_FILE, JSON.stringify(cfg, null, 2) + "\n");
+      // Poner o quitar la statusline: se aplica ya en Windows; las distros de
+      // WSL, al reintegrar (bandeja > Mantenimiento > Reintegrar agentes).
+      if (reintegrate) {
+        execFile(process.execPath, [path.join(REPO_ROOT, "hooks", "integrate.mjs")],
+          { windowsHide: true, timeout: 15000 },
+          (err, stdout) => log(`reintegración por limits.statusline: ${err ? err.message : String(stdout).trim()}`));
+      }
+      scheduleBroadcast();
       return json(res, 200, { ok: true });
     } catch (e) {
       return json(res, 500, { error: `no se pudo guardar: ${e.message}` });
@@ -1656,6 +1849,14 @@ server.listen(PORT, "127.0.0.1", () => {
   purgeOldSessions();
   setInterval(purgeOldSessions, 3600e3);
   watchState();
+  // Límites: sondeo del Codex de Windows y revisión de avisos (umbral
+  // cruzado, ventana reiniciada) aunque no llegue ningún evento nuevo.
+  const limitsTick = () => {
+    pollCodexLimits();
+    checkLimitAlerts(buildLimits());
+  };
+  setTimeout(limitsTick, 5e3);
+  setInterval(limitsTick, 60e3);
   // Comprobación de actualizaciones: se puede apagar con
   // { "update": { "check": false } } en config.json. La primera va con retraso
   // para no competir con el arranque del HUD.

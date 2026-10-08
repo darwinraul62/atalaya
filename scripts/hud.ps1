@@ -217,6 +217,8 @@ $MusicCfg = $false    # controles de musica en la barra acoplada (bar.music)
 $MusicTitleCfg = $true  # titulo de la cancion junto a los controles (bar.musicTitle)
 $DockCountersCfg = $true # contadores en la barra acoplada (bar.counters)
 $DockAlignCfg = "start"  # escritorios al inicio, centro o final (bar.align)
+$DockLimitsCfg = $true   # medidores de limites de uso en la barra acoplada (bar.limits)
+$PillLimitsCfg = "threshold" # en la pildora: "threshold" (al pasar el umbral), "always", "off"
 $MeetingCfg = $false  # modo reunion: oculta nombres (privacy.meeting)
 try {
     $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
@@ -241,6 +243,8 @@ try {
     if ($null -ne $cfg.bar.musicTitle) { $MusicTitleCfg = [bool]$cfg.bar.musicTitle }
     if ($null -ne $cfg.bar.counters) { $DockCountersCfg = [bool]$cfg.bar.counters }
     if ($cfg.bar.align -in @("start", "center", "end")) { $DockAlignCfg = [string]$cfg.bar.align }
+    if ($null -ne $cfg.bar.limits) { $DockLimitsCfg = [bool]$cfg.bar.limits }
+    if ($cfg.pill.limits -in @("threshold", "always", "off")) { $PillLimitsCfg = [string]$cfg.pill.limits }
     if ($null -ne $cfg.privacy.meeting) { $MeetingCfg = [bool]$cfg.privacy.meeting }
 } catch { }
 
@@ -344,6 +348,7 @@ $xaml = @"
         <TextBlock x:Name="TxtAttn"  FontSize="13" FontWeight="SemiBold" Foreground="#E0A33F" VerticalAlignment="Center" FontFamily="Segoe UI Emoji, Segoe UI"/>
         <TextBlock x:Name="TxtWork"  FontSize="13" FontWeight="SemiBold" Foreground="#5B9CD9" VerticalAlignment="Center" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
         <TextBlock x:Name="TxtReady" FontSize="13" FontWeight="SemiBold" Foreground="#3FB3A8" VerticalAlignment="Center" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
+        <TextBlock x:Name="TxtLim"   FontSize="12.5" FontWeight="SemiBold" Foreground="#93A2B0" VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI" Visibility="Collapsed"/>
         <TextBlock x:Name="TxtPomo"  FontSize="12.5" FontWeight="SemiBold" Foreground="#D98A7E" VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI" Visibility="Collapsed"/>
         <TextBlock x:Name="BtnDeck"  FontSize="10.5" FontWeight="SemiBold" Foreground="#8FA3B8" VerticalAlignment="Center" Margin="12,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
         <TextBlock x:Name="BtnPanel" FontSize="13" FontWeight="SemiBold" Foreground="#8FA3B8" VerticalAlignment="Center" Margin="11,0,0,0" FontFamily="Segoe UI Emoji, Segoe UI"/>
@@ -362,6 +367,7 @@ $txtAttn  = $window.FindName("TxtAttn")
 $txtWork  = $window.FindName("TxtWork")
 $txtReady = $window.FindName("TxtReady")
 $txtPomo  = $window.FindName("TxtPomo")
+$txtLim   = $window.FindName("TxtLim")
 $btnDeck  = $window.FindName("BtnDeck")
 $btnPanel = $window.FindName("BtnPanel")
 
@@ -384,7 +390,7 @@ if ($Vertical) {
     $root.Orientation = "Vertical"
     $deskBtns.Orientation = "Vertical"; $deskBtns.Margin = "0,0,0,6"
     $pinBtns.Orientation = "Vertical";  $pinBtns.Margin = "0,0,0,6"
-    foreach ($tb in @($txtAttn, $txtWork, $txtReady, $txtPomo, $btnDeck, $btnPanel)) {
+    foreach ($tb in @($txtAttn, $txtWork, $txtReady, $txtLim, $txtPomo, $btnDeck, $btnPanel)) {
         $tb.Margin = "0,5,0,0"; $tb.HorizontalAlignment = "Left"
     }
     $txtAttn.Margin = "0,0,0,0"
@@ -405,6 +411,15 @@ $btnPanel.Add_MouseLeftButtonDown({
     param($src, $e)
     $e.Handled = $true
     Open-PanelMax
+})
+
+# Medidor de limites: raton encima = tarjeta de limites; clic = fijarla
+$txtLim.Cursor = "Hand"
+$txtLim.Add_MouseEnter({ param($src, $e) Request-LimitCard $src "pill" })
+$txtLim.Add_MouseLeftButtonDown({
+    param($src, $e)
+    $e.Handled = $true   # que no arranque el arrastre de la pastilla
+    Toggle-LimitCard $src "pill"
 })
 
 # Boton del deck: apertura EXPLICITA (modo por defecto deck.open = "click");
@@ -1363,6 +1378,7 @@ $script:DockEdge = ""
 $script:DockMonitor = "primary"
 $script:DockAlign = $DockAlignCfg
 $script:DockShowCounters = $DockCountersCfg
+$script:DockShowLimits = $DockLimitsCfg
 $script:DockEditing = $false
 $script:DockRenamePopup = $null
 $script:DockClosingByUs = $false
@@ -1547,7 +1563,8 @@ function Update-DockBar($s) {
     if ($script:DockBars.Count -eq 0 -or $script:DockEditing) { return }
     $key = if ($s) {
         ((Get-TbDesks $s | ForEach-Object { "$($_.num)|$($_.name)|$($_.current)|$($_.needs_you)|$($_.working)" }) -join ";") +
-            "#$($s.needs_you)|$($s.working)|$($s.ready)"
+            "#$($s.needs_you)|$($s.working)|$($s.ready)" +
+            $(if ($script:DockShowLimits) { "#" + (Get-LimitKey $s) } else { "" })
     } else { "offline" }
     $vertical = Test-DockVertical
     foreach ($bar in $script:DockBars) {
@@ -1588,6 +1605,36 @@ function Update-DockBar($s) {
             $b.Add_MouseLeftButtonUp({ param($src, $e) On-DockClick $src $e })
             $b.Add_MouseRightButtonUp({ param($src, $e) On-DockRightClick $src $e })
             [void]$desks.Children.Add($b)
+        }
+        # Medidores de limites: "Claude 42%·18%" en horizontal; en vertical solo
+        # la ventana mas ocupada ("Cl" sobre "42"). Raton encima = tarjeta de
+        # limites; clic = fijarla.
+        if ($script:DockShowLimits) {
+            foreach ($v in @(Get-LimitView $s)) {
+                if ($vertical) {
+                    $txt = "$($v.Short)`n$(Get-LimitMark $v.Level)$(if ($null -eq $v.Worst) { '-' } else { $v.Worst })"
+                } else {
+                    $txt = "$($v.Name) $(Format-LimitPcts $v)"
+                }
+                $tb = New-DockText $txt (Get-LimitBrush $v.Level) ($v.Level -in @("warn", "crit"))
+                if ($vertical) { $tb.TextAlignment = "Center"; $tb.FontSize = 10.5 }
+                if ($v.Stale) { $tb.Opacity = 0.55 }
+                $border = if ($v.Level -in @("warn", "crit")) { Get-LimitBrush $v.Level } else { $BgRow }
+                $b = New-DockButton $tb $BgRow $border "" ("lim:" + $v.Agent)
+                $b.ToolTip = $null
+                $b.Padding = if ($vertical) { "0,2" } else { "6,2" }
+                $b.Add_MouseEnter({ param($src, $e) Request-LimitCard $src "dock" })
+                $b.Add_MouseLeftButtonUp({ param($src, $e) $e.Handled = $true; Toggle-LimitCard $src "dock" })
+                [void]$tail.Children.Add($b)
+                # La barra se repinta sola: si la tarjeta colgaba del indicador
+                # viejo, pasa al nuevo para no quedarse flotando sin ancla
+                if ($script:LimPop -and $script:LimPop.IsOpen -and $script:LimPopSource -eq "dock" -and
+                    $script:LimPopWin -eq $bar.Win -and $script:LimPopTag -eq $b.Tag) {
+                    $script:LimPopTarget = $b
+                    $script:LimPop.PlacementTarget = $b
+                    Reset-LimitCardPosition
+                }
+            }
         }
         $sp = if ($vertical) { "" } else { " " }
         $counters = if ($script:DockShowCounters) { @(
@@ -1753,6 +1800,7 @@ function On-DockToggle($sender, $e) {
         "music"    { Set-MusicEnabled (-not $script:MusicEnabled); $sender.Checked = $script:MusicEnabled }
         "title"    { Set-DockContent "musicTitle" (-not $script:MusicShowTitle); $sender.Checked = $script:MusicShowTitle }
         "counters" { Set-DockContent "counters" (-not $script:DockShowCounters); $sender.Checked = $script:DockShowCounters }
+        "limits"   { Set-DockContent "limits" (-not $script:DockShowLimits); $sender.Checked = $script:DockShowLimits }
         "meeting"  { Set-MeetingMode (-not $script:Meeting); $sender.Checked = $script:Meeting }
     }
 }
@@ -1760,6 +1808,7 @@ function Set-DockContent([string]$key, [bool]$v) {
     switch ($key) {
         "musicTitle" { $script:MusicShowTitle = $v }
         "counters"   { $script:DockShowCounters = $v }
+        "limits"     { $script:DockShowLimits = $v }
     }
     Invoke-HubPost "/api/config" ('{"bar":{"' + $key + '":' + $(if ($v) { "true" } else { "false" }) + '}}')
     foreach ($b in $script:DockBars) { $b.Key = "" }
@@ -1784,6 +1833,7 @@ function Update-DockMenu {
     Add-DockToggle $items "Controles de música" "music" $script:MusicEnabled $on
     Add-DockToggle $items "    Título de la canción" "title" $script:MusicShowTitle ($on -and $script:MusicEnabled)
     Add-DockToggle $items "Contadores de sesiones" "counters" $script:DockShowCounters $on
+    Add-DockToggle $items "Límites de uso (Claude, Codex)" "limits" $script:DockShowLimits $on
     [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
     $v = Test-DockVertical
     foreach ($o in @(@("start", $(if ($v) { "Escritorios arriba" } else { "Escritorios a la izquierda" })),
@@ -1852,6 +1902,7 @@ function Update-Hud {
     if ($null -eq $s) {
         $txtAttn.Text = "$GlyphBell -"; $txtWork.Text = "$GlyphGear -"; $txtReady.Text = "$GlyphCheck -"
         $txtAttn.Opacity = 0.4; $txtWork.Opacity = 0.4; $txtReady.Opacity = 0.4
+        $txtLim.Visibility = "Collapsed"
         $pill.Background = $BgCalm; $pill.BorderBrush = $BrCalm
         $script:BaseOpacity = 0.55
         Set-PillOpacity
@@ -1991,7 +2042,9 @@ function Update-Hud {
     $window.ToolTip = if ($s.urgent) { "Atiende: $($s.urgent)" }
         elseif ($script:PillCompact) { "Atalaya (compacta): doble clic abre el panel - clic derecho para volver al tamaño normal ($($Hotkeys.compactPill))" }
         else { $null }
+    Update-PillLimits $s
     $script:LastSummary = $s
+    Update-LimitCard $s
     Update-TrayStatus $s
     Update-TaskbarAnchor $s
     Update-DockBar $s
@@ -2033,6 +2086,477 @@ $BgRow     = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::Fr
 $BgRowCur  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x55, 0x1B, 0x2C, 0x3E))
 $BgRowHov  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x70, 0x2A, 0x3B, 0x4E))
 $LineSep   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x66, 0x3A, 0x46, 0x56))
+$ColCrit   = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0xE0, 0x6C, 0x62))
+
+# ---- Limites de uso (Claude Code, Codex) ---------------------------------------
+# El hub manda la ultima muestra de cada agente (summary.limits). Aqui se
+# decide que se ve: las ventanas cuya hora de reinicio ya paso no cuentan (su
+# porcentaje ya no vale) y la antiguedad del dato se recalcula en cada tick.
+# Nivel con glifo ademas de color (tema daltonized): triangulo = umbral de
+# aviso, senal de prohibido = umbral urgente.
+$GlyphLimWarn = [char]::ConvertFromUtf32(0x25B2)   # triangulo: limite cerca
+$GlyphLimCrit = [char]::ConvertFromUtf32(0x26D4)   # prohibido: limite casi agotado
+$GlyphCycle   = [char]::ConvertFromUtf32(0x21BB)   # flecha circular: se reinicia en
+$LimShort = @{ claude = "Cl"; codex = "Cx" }       # para la barra vertical y la pildora
+
+function Get-NowMs { return [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
+
+function Format-Span([double]$ms) {
+    $min = [Math]::Max(0, [int][Math]::Round($ms / 60000))
+    if ($min -lt 60) { return "$min min" }
+    if ($min -lt 1440) { return ("{0} h {1:00}" -f [Math]::Floor($min / 60), ($min % 60)) }
+    $h = [int][Math]::Floor(($min % 1440) / 60)
+    if ($h -eq 0) { return ("{0} d" -f [Math]::Floor($min / 1440)) }
+    return ("{0} d {1} h" -f [Math]::Floor($min / 1440), $h)
+}
+
+function Get-LimitView($s) {
+    $out = @()
+    if (-not $s -or -not $s.limits -or -not $s.limits.enabled) { return $out }
+    $warn = @($s.limits.warnAt)
+    $lo = if ($warn.Count) { [double]$warn[0] } else { 80 }
+    $hi = if ($warn.Count) { [double]$warn[$warn.Count - 1] } else { 95 }
+    $now = Get-NowMs
+    foreach ($a in @($s.limits.agents)) {
+        $items = @(); $worst = $null; $tips = @()
+        foreach ($w in @($a.windows)) {
+            $expired = [bool]$w.expired -or ($w.resetsAt -and [double]$w.resetsAt -le $now)
+            if ($expired -or $null -eq $w.usedPct) {
+                $items += [pscustomobject]@{ Label = [string]$w.label; Pct = $null; Level = "none"; Eta = "reiniciada"; ResetAt = $null }
+                $tips += "$($w.label): reiniciada, sin dato nuevo"
+                continue
+            }
+            $p = [int]$w.usedPct
+            $lv = if ($p -ge $hi) { "crit" } elseif ($p -ge $lo) { "warn" } else { "ok" }
+            $eta = if ($w.resetsAt) { Format-Span ([double]$w.resetsAt - $now) } else { "" }
+            $items += [pscustomobject]@{ Label = [string]$w.label; Pct = $p; Level = $lv; Eta = $eta; ResetAt = $(if ($w.resetsAt) { [double]$w.resetsAt } else { $null }) }
+            if ($null -eq $worst -or $p -gt $worst) { $worst = $p }
+            $tips += "$($w.label): $p% usado$(if ($eta) { " - se reinicia en $eta" })"
+        }
+        $level = if ($null -eq $worst) { "none" } elseif ($worst -ge $hi) { "crit" } elseif ($worst -ge $lo) { "warn" } else { "ok" }
+        $age = $now - [double]$a.observedAt
+        $ageTxt = if ($age -lt 90000) { "dato al día" } else { "dato de hace $(Format-Span $age)" }
+        $short = $LimShort[[string]$a.agent]
+        if (-not $short) { $short = ([string]$a.name).Substring(0, 2) }
+        $plan = if ($a.plan) { " ($($a.plan))" } else { "" }
+        $tip = "$($a.name)$plan`n" + ($tips -join "`n") + "`n$ageTxt"
+        if ($a.reached) { $tip += "`nLímite alcanzado" }
+        $out += [pscustomobject]@{
+            Agent = [string]$a.agent; Name = [string]$a.name; Short = $short
+            Items = $items; Worst = $worst; Level = $level
+            Stale = $age -gt 1800000; Tip = $tip
+            Plan = [string]$a.plan; AgeTxt = $ageTxt; Reached = [bool]$a.reached
+        }
+    }
+    return $out
+}
+
+function Get-LimitBrush([string]$level) {
+    if ($level -eq "crit") { return $ColCrit }
+    if ($level -eq "warn") { return $ColAttn }
+    return $ColInk2
+}
+function Get-LimitMark([string]$level) {
+    if ($level -eq "crit") { return $GlyphLimCrit }
+    if ($level -eq "warn") { return $GlyphLimWarn }
+    return ""
+}
+# "42%·18%" con el glifo de nivel delante del valor que lo provoca
+function Format-LimitPcts($v) {
+    $parts = @()
+    foreach ($it in $v.Items) {
+        if ($null -eq $it.Pct) { continue }
+        $parts += "$(Get-LimitMark $it.Level)$($it.Pct)%"
+    }
+    if (-not $parts.Count) { return "-" }
+    return ($parts -join [string][char]0x00B7)
+}
+# Clave para repintar solo cuando cambia algo visible (y una vez por minuto,
+# para que el tooltip no se quede con un "se reinicia en" viejo)
+function Get-LimitKey($s) {
+    $k = [string][Math]::Floor((Get-NowMs) / 60000)
+    foreach ($v in @(Get-LimitView $s)) { $k += "|$($v.Agent):$(Format-LimitPcts $v):$($v.Stale)" }
+    return $k
+}
+
+# ---- Tarjeta de limites ---------------------------------------------------------
+# Lo mismo que la tarjeta del panel, flotando junto al indicador de la barra
+# acoplada o de la pildora: raton encima = se abre (y se cierra al salir de
+# indicador y tarjeta); clic = queda fija hasta otro clic o la X. Es un Popup
+# de WPF (ventana propia, siempre encima y sin robar el foco). Regla del HUD:
+# nada de .GetNewClosure(); el estado vive en variables $script:.
+$script:LimPop = $null          # el Popup (se crea la primera vez)
+$script:LimPopTarget = $null    # indicador del que cuelga
+$script:LimPopSource = ""       # "dock" o "pill"
+$script:LimPopWin = $null       # ventana del indicador (hay una barra por monitor)
+$script:LimPopTag = ""          # "lim:<agente>": para reencontrarlo al repintar
+$script:LimPopSticky = $false   # fijada con clic
+$script:LimPopKey = ""          # lo que muestra: se rehace solo si cambia
+$script:LimPopPending = $null   # hover en espera de confirmarse
+$script:LimPopPendingSrc = ""
+$script:LimPopTicks = 0
+$script:LimPopAway = 0
+$script:LimPopTimer = New-Object System.Windows.Threading.DispatcherTimer
+$script:LimPopTimer.Interval = [TimeSpan]::FromMilliseconds(150)
+$script:LimPopTimer.Add_Tick({ Step-LimitCard })
+
+$LimCardBg = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0xF7, 0x14, 0x1A, 0x22))
+$LimCardBr = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromRgb(0x44, 0x53, 0x6A))
+$LimRowBg  = New-Object Windows.Media.SolidColorBrush ([Windows.Media.Color]::FromArgb(0x66, 0x1E, 0x27, 0x32))
+$GlyphClock = [char]::ConvertFromUtf32(0x23F1)   # cronometro: antiguedad del dato
+
+# "hoy 13:45" / "vie 09:00": la hora local exacta del reinicio
+function Format-ResetAt($ms) {
+    if ($null -eq $ms) { return "" }
+    $d = [DateTimeOffset]::FromUnixTimeMilliseconds([long]$ms).LocalDateTime
+    if ($d.Date -eq (Get-Date).Date) { return "hoy " + $d.ToString("HH:mm") }
+    if ($d.Date -eq (Get-Date).Date.AddDays(1)) { return "mañana " + $d.ToString("HH:mm") }
+    $day = @("dom", "lun", "mar", "mié", "jue", "vie", "sáb")[[int]$d.DayOfWeek]
+    return "$day $($d.Day) " + $d.ToString("HH:mm")
+}
+
+function New-LimitCardBar($pct, [string]$level, [double]$width) {
+    $track = New-Object Windows.Controls.Border
+    $track.Width = $width; $track.Height = 8; $track.CornerRadius = 4
+    $track.VerticalAlignment = "Center"; $track.Background = $LineSep
+    if ($null -ne $pct) {
+        $fill = New-Object Windows.Controls.Border
+        $fill.Width = [Math]::Max(3, $width * [Math]::Min(100, [double]$pct) / 100)
+        $fill.CornerRadius = 4; $fill.HorizontalAlignment = "Left"
+        $fill.Background = if ($level -eq "ok") { $DockReady } else { Get-LimitBrush $level }
+        $track.Child = $fill
+    }
+    return $track
+}
+
+function New-LimitCard($s) {
+    $views = @(Get-LimitView $s)
+    $stack = New-Object Windows.Controls.StackPanel
+
+    # Cabecera: titulo + (fijada: X para cerrar | al vuelo: como fijarla)
+    $head = New-Object Windows.Controls.DockPanel
+    $head.Margin = "0,0,0,9"
+    if ($script:LimPopSticky) {
+        $x = New-DeckBtn "$([char]0x2715)" $ColInk2 12 "Cerrar" { Close-LimitCard } $false
+        [Windows.Controls.DockPanel]::SetDock($x, "Right")
+        [void]$head.Children.Add($x)
+    } else {
+        $hint = New-DeckText "clic para fijar" $ColInk3 10.5 0 $false
+        [Windows.Controls.DockPanel]::SetDock($hint, "Right")
+        [void]$head.Children.Add($hint)
+    }
+    [void]$head.Children.Add((New-DeckText "Límites de uso" $ColInk 14 0 $true))
+    [void]$stack.Children.Add($head)
+
+    if (-not $views.Count) {
+        $t = New-DeckText ("Sin datos todavía. Claude Code los informa desde la terminal " +
+            "(con suscripción) y Codex al terminar un turno.") $ColInk2 11.5 0 $false
+        $t.TextWrapping = "Wrap"; $t.MaxWidth = 340
+        [void]$stack.Children.Add($t)
+    }
+
+    $first = $true
+    foreach ($v in $views) {
+        # Un bloque por agente, como las tarjetas del panel
+        $box = New-Object Windows.Controls.Border
+        $box.Background = $LimRowBg; $box.CornerRadius = 9
+        $box.Padding = "11,8,11,9"; $box.Margin = if ($first) { "0" } else { "0,8,0,0" }
+        if ($v.Stale) { $box.Opacity = 0.72 }
+        $first = $false
+        $inner = New-Object Windows.Controls.StackPanel
+
+        $top = New-Object Windows.Controls.DockPanel
+        $top.Margin = "0,0,0,6"
+        $age = New-DeckText "$GlyphClock $($v.AgeTxt)" $(if ($v.Stale) { $ColAttn } else { $ColInk3 }) 10.5 0 $false
+        [Windows.Controls.DockPanel]::SetDock($age, "Right")
+        [void]$top.Children.Add($age)
+        $nameRow = New-Object Windows.Controls.StackPanel
+        $nameRow.Orientation = "Horizontal"
+        [void]$nameRow.Children.Add((New-DeckText $v.Name $ColInk 13 0 $true))
+        if ($v.Plan) {
+            $chip = New-Object Windows.Controls.Border
+            $chip.BorderBrush = $ColInk3; $chip.BorderThickness = 1; $chip.CornerRadius = 6
+            $chip.Padding = "5,0"; $chip.Margin = "8,1,0,0"; $chip.VerticalAlignment = "Center"
+            $chip.Child = New-DeckText $v.Plan $ColInk2 10 0 $false
+            [void]$nameRow.Children.Add($chip)
+        }
+        [void]$top.Children.Add($nameRow)
+        [void]$inner.Children.Add($top)
+
+        foreach ($it in $v.Items) {
+            $g = New-Object Windows.Controls.Grid
+            $g.Margin = "0,2,0,2"
+            foreach ($wd in @(38, 168, 62)) {
+                $cd = New-Object Windows.Controls.ColumnDefinition
+                $cd.Width = New-Object Windows.GridLength $wd
+                $g.ColumnDefinitions.Add($cd)
+            }
+            $cd = New-Object Windows.Controls.ColumnDefinition
+            $cd.Width = [Windows.GridLength]::Auto
+            $g.ColumnDefinitions.Add($cd)
+            $lbl = New-DeckText $it.Label $ColInk2 12 0 $false
+            $bar = New-LimitCardBar $it.Pct $it.Level 160
+            $brush = Get-LimitBrush $it.Level
+            if ($null -eq $it.Pct) {
+                $pct = New-DeckText "—" $ColInk3 12.5 0 $false
+                $eta = New-DeckText "$GlyphCycle reiniciada, sin dato nuevo" $ColInk3 11 0 $false
+            } else {
+                $pct = New-DeckText "$(Get-LimitMark $it.Level)$($it.Pct)%" $(if ($it.Level -eq "ok") { $ColInk } else { $brush }) 12.5 0 $true
+                $when = Format-ResetAt $it.ResetAt
+                $etaTxt = if ($it.Eta) { "$GlyphCycle $($it.Eta)" } else { "" }
+                if ($when) { $etaTxt += "  $([char]0x00B7) $when" }
+                $eta = New-DeckText $etaTxt $ColInk3 11 0 $false
+            }
+            $pct.HorizontalAlignment = "Right"; $pct.Margin = "0,0,10,0"
+            [Windows.Controls.Grid]::SetColumn($bar, 1)
+            [Windows.Controls.Grid]::SetColumn($pct, 2)
+            [Windows.Controls.Grid]::SetColumn($eta, 3)
+            foreach ($el in @($lbl, $bar, $pct, $eta)) { [void]$g.Children.Add($el) }
+            [void]$inner.Children.Add($g)
+        }
+        if ($v.Reached) {
+            $r = New-DeckText "$GlyphLimCrit límite alcanzado" $ColCrit 11.5 0 $true
+            $r.Margin = "0,4,0,0"
+            [void]$inner.Children.Add($r)
+        }
+        $box.Child = $inner
+        [void]$stack.Children.Add($box)
+    }
+
+    # Pie: umbrales de aviso y acceso al panel
+    $foot = New-Object Windows.Controls.DockPanel
+    $foot.Margin = "0,9,0,0"
+    $open = New-DeckBtn "Abrir panel $([char]0x2197)" $ColChrome 11.5 "Abrir Atalaya en máximo foco" { Close-LimitCard; Open-PanelMax } $true
+    [Windows.Controls.DockPanel]::SetDock($open, "Right")
+    [void]$foot.Children.Add($open)
+    $warn = @()
+    if ($s -and $s.limits) { $warn = @($s.limits.warnAt) }
+    $wtxt = if ($warn.Count) { "Avisos al " + (($warn | ForEach-Object { "$_ %" }) -join " y ") } else { "" }
+    [void]$foot.Children.Add((New-DeckText $wtxt $ColInk3 10.5 0 $false))
+    [void]$stack.Children.Add($foot)
+
+    $card = New-Object Windows.Controls.Border
+    $card.Background = $LimCardBg; $card.BorderBrush = $LimCardBr; $card.BorderThickness = 1
+    $card.CornerRadius = 12; $card.Padding = "14,11,14,11"; $card.MinWidth = 400
+    $fx = New-Object Windows.Media.Effects.DropShadowEffect
+    $fx.BlurRadius = 16; $fx.ShadowDepth = 3; $fx.Direction = 270; $fx.Opacity = 0.55
+    $card.Effect = $fx
+    $card.Child = $stack
+    return $card
+}
+
+# Hacia donde se abre: lejos del borde de la barra; en la pildora, hacia el
+# lado de la pantalla con mas sitio
+function Set-LimitCardPlacement {
+    $p = $script:LimPop
+    $p.PlacementTarget = $script:LimPopTarget
+    $p.HorizontalOffset = 0; $p.VerticalOffset = 0
+    if ($script:LimPopSource -eq "dock") {
+        switch ($script:DockEdge) {
+            "top"   { $p.Placement = "Bottom" }
+            "left"  { $p.Placement = "Right" }
+            "right" { $p.Placement = "Left" }
+            default { $p.Placement = "Top" }
+        }
+    } else {
+        $wa = [System.Windows.SystemParameters]::WorkArea
+        $p.Placement = if ($window.Top -gt ($wa.Top + $wa.Height / 2)) { "Top" } else { "Bottom" }
+    }
+}
+
+function Show-LimitCard($target, [string]$source, [bool]$sticky) {
+    if (-not $script:LimPop) {
+        $p = New-Object Windows.Controls.Primitives.Popup
+        $p.AllowsTransparency = $true; $p.StaysOpen = $true; $p.PopupAnimation = "Fade"
+        # Contenedor FIJO: solo cambia lo de dentro (margen = sitio para la sombra)
+        $script:LimPopHost = New-Object Windows.Controls.Grid
+        $script:LimPopHost.Margin = "8"
+        $p.Child = $script:LimPopHost
+        $script:LimPop = $p
+    }
+    $script:LimPopTarget = $target
+    $script:LimPopSource = $source
+    $script:LimPopTag = [string]$target.Tag
+    $script:LimPopWin = [Windows.Window]::GetWindow($target)
+    $script:LimPopSticky = $sticky
+    $script:LimPopAway = 0
+    Set-LimitCardPlacement
+    Set-LimitCardContent $script:LastSummary
+    $script:LimPopKey = (Get-LimitKey $script:LastSummary) + "|$sticky"
+    $script:LimPop.IsOpen = $true
+    $script:LimPopTimer.Start()
+}
+
+function Close-LimitCard {
+    $script:LimPopPending = $null
+    $script:LimPopSticky = $false
+    if ($script:LimPop) { $script:LimPop.IsOpen = $false }
+    $script:LimPopTimer.Stop()
+}
+
+# Raton encima de un indicador: se abre si sigue encima ~300 ms (pasar de
+# largo no la dispara); si ya hay una abierta al vuelo, se cambia de ancla
+function Request-LimitCard($target, [string]$source) {
+    if ($script:LimPop -and $script:LimPop.IsOpen) {
+        if (-not $script:LimPopSticky -and $script:LimPopTarget -ne $target) { Show-LimitCard $target $source $false }
+        return
+    }
+    $script:LimPopPending = $target
+    $script:LimPopPendingSrc = $source
+    $script:LimPopTicks = 0
+    $script:LimPopTimer.Start()
+}
+
+function Toggle-LimitCard($target, [string]$source) {
+    $script:LimPopPending = $null
+    if ($script:LimPop -and $script:LimPop.IsOpen -and $script:LimPopSticky) { Close-LimitCard; return }
+    Show-LimitCard $target $source $true
+}
+
+# Por geometria y no con IsMouseOver: al rehacer el contenido, el elemento
+# nuevo no se entera de que el raton esta encima hasta que este se mueve, y
+# la tarjeta se cerraria sola bajo el cursor quieto.
+function Test-MouseInside($el) {
+    if (-not $el) { return $false }
+    try {
+        if (-not $el.IsVisible) { return $false }
+        $a = $el.PointToScreen((New-Object Windows.Point 0, 0))
+        $b = $el.PointToScreen((New-Object Windows.Point $el.ActualWidth, $el.ActualHeight))
+        $m = [System.Windows.Forms.Control]::MousePosition
+        return ($m.X -ge [Math]::Min($a.X, $b.X) - 2 -and $m.X -le [Math]::Max($a.X, $b.X) + 2 -and
+                $m.Y -ge [Math]::Min($a.Y, $b.Y) - 2 -and $m.Y -le [Math]::Max($a.Y, $b.Y) + 2)
+    } catch { return $false }   # elemento ya retirado de su ventana
+}
+
+function Step-LimitCard {
+    try {
+        if ($script:LimPopPending) {
+            if (Test-MouseInside $script:LimPopPending) {
+                $script:LimPopTicks++
+                if ($script:LimPopTicks -ge 2) {
+                    $t = $script:LimPopPending; $script:LimPopPending = $null
+                    Show-LimitCard $t $script:LimPopPendingSrc $false
+                }
+            } else { $script:LimPopPending = $null }
+            return
+        }
+        if (-not ($script:LimPop -and $script:LimPop.IsOpen)) { $script:LimPopTimer.Stop(); return }
+        # Sin indicador (la pildora oculto el medidor, se apago la barra): fuera
+        try { $gone = -not $script:LimPopTarget.IsVisible } catch { $gone = $true }
+        if ($gone) { Close-LimitCard; return }
+        if ($script:LimPopSticky) { return }
+        if ((Test-MouseInside $script:LimPopTarget) -or (Test-MouseInside $script:LimPopHost)) {
+            $script:LimPopAway = 0; return
+        }
+        $script:LimPopAway++
+        if ($script:LimPopAway -ge 3) { Close-LimitCard }
+    } catch { Write-HudLog "tarjeta de limites: $_" }
+}
+
+# Cada tick del HUD: si esta abierta y cambio algo, se rehace en el sitio
+function Update-LimitCard($s) {
+    if (-not ($script:LimPop -and $script:LimPop.IsOpen)) { return }
+    $key = (Get-LimitKey $s) + "|$($script:LimPopSticky)"
+    if ($key -eq $script:LimPopKey) { return }
+    $script:LimPopKey = $key
+    Set-LimitCardContent $s
+}
+
+# El Popup de WPF calcula su sitio AL ABRIRSE: si luego cambia el tamanio del
+# contenido (otra antiguedad del dato, una fila mas) o el indicador se
+# redibuja, se queda donde estaba y la tarjeta acaba montada sobre la barra.
+# Tocar el desplazamiento le obliga a recolocarse; se hace al momento y otra
+# vez cuando el despachador termina de maquetar (el ancla nueva aun no mide).
+function Set-LimitCardContent($s) {
+    $script:LimPopHost.Children.Clear()
+    [void]$script:LimPopHost.Children.Add((New-LimitCard $s))
+    Reset-LimitCardPosition
+}
+function Reset-LimitCardPosition {
+    if (-not ($script:LimPop -and $script:LimPop.IsOpen)) { return }
+    try {
+        $script:LimPopHost.UpdateLayout()
+        $o = $script:LimPop.HorizontalOffset
+        $script:LimPop.HorizontalOffset = $o + 1
+        $script:LimPop.HorizontalOffset = $o
+    } catch { Write-HudLog "tarjeta de limites: recolocar: $_" }
+    if (-not $script:LimPopRepositionQueued) {
+        $script:LimPopRepositionQueued = $true
+        [void]$script:LimPop.Dispatcher.BeginInvoke([Action]{ Complete-LimitCardPosition }, [Windows.Threading.DispatcherPriority]::Loaded)
+    }
+}
+$script:LimPopRepositionQueued = $false
+function Complete-LimitCardPosition {
+    $script:LimPopRepositionQueued = $false
+    if (-not ($script:LimPop -and $script:LimPop.IsOpen)) { return }
+    try {
+        $o = $script:LimPop.HorizontalOffset
+        $script:LimPop.HorizontalOffset = $o + 1
+        $script:LimPop.HorizontalOffset = $o
+    } catch { }
+}
+
+# Pildora: segun pill.limits ("threshold" por defecto: solo al pasar el umbral
+# de aviso; en compacta, igual). Clic = abrir el panel.
+function Update-PillLimits($s) {
+    $views = @(Get-LimitView $s)
+    $show = @()
+    if ($PillLimitsCfg -ne "off") {
+        foreach ($v in $views) {
+            if ($null -eq $v.Worst) { continue }
+            if ($PillLimitsCfg -eq "always" -and -not $script:PillCompact) { $show += $v }
+            elseif ($v.Level -in @("warn", "crit")) { $show += $v }
+        }
+    }
+    if (-not $show.Count) { $txtLim.Visibility = "Collapsed"; return }
+    $parts = @(); $lv = "ok"
+    foreach ($v in $show) {
+        $parts += "$($v.Short) $(Format-LimitPcts $v)"
+        if ($v.Level -eq "crit" -or ($v.Level -eq "warn" -and $lv -eq "ok")) { $lv = $v.Level }
+    }
+    $txtLim.Text = $parts -join "  "
+    $txtLim.Foreground = Get-LimitBrush $lv
+    $txtLim.Visibility = "Visible"
+}
+
+# Deck: una fila por agente al pie de la vista de escritorios
+function Add-DeckLimits($s) {
+    $views = @(Get-LimitView $s)
+    if (-not $views.Count) { return }
+    [void]$deckStack.Children.Add((New-DeckSep))
+    foreach ($v in $views) {
+        $line = New-Object Windows.Controls.StackPanel
+        $line.Orientation = "Horizontal"; $line.Margin = "2,1,2,1"
+        $name = New-DeckText $v.Name $ColInk 12 62 $true
+        if ($v.Stale) { $line.Opacity = 0.6 }
+        [void]$line.Children.Add($name)
+        foreach ($it in $v.Items) {
+            $lbl = New-DeckText $it.Label $ColInk2 11.5 0 $false
+            $lbl.Margin = "10,0,5,0"
+            [void]$line.Children.Add($lbl)
+            if ($null -eq $it.Pct) {
+                [void]$line.Children.Add((New-DeckText "$GlyphCycle reiniciada" $ColInk3 11.5 0 $false))
+                continue
+            }
+            $brush = Get-LimitBrush $it.Level
+            # Barra grafica (los caracteres de bloque parecian glifos rotos)
+            $track = New-Object Windows.Controls.Border
+            $track.Width = 44; $track.Height = 6; $track.CornerRadius = 3
+            $track.VerticalAlignment = "Center"; $track.Background = $LineSep
+            $fill = New-Object Windows.Controls.Border
+            $fill.Width = [Math]::Max(2, 44 * [Math]::Min(100, $it.Pct) / 100); $fill.CornerRadius = 3
+            $fill.HorizontalAlignment = "Left"
+            $fill.Background = if ($it.Level -eq "ok") { $DockReady } else { $brush }
+            $track.Child = $fill
+            [void]$line.Children.Add($track)
+            $t = " $(Get-LimitMark $it.Level)$($it.Pct)%"
+            if ($it.Eta) { $t += "  $GlyphCycle$($it.Eta)" }
+            [void]$line.Children.Add((New-DeckText $t $brush 11.5 0 ($it.Level -ne "ok")))
+        }
+        $line.ToolTip = $v.Tip
+        [void]$deckStack.Children.Add($line)
+    }
+}
 
 function New-DeckText([string]$text, $brush, [double]$size, [double]$width, [bool]$bold) {
     $tb = New-Object Windows.Controls.TextBlock
@@ -2570,6 +3094,7 @@ function Update-Deck($s) {
         }
         [void]$deckStack.Children.Add($row)
     }
+    Add-DeckLimits $s
     Add-DeckFooter
     } catch {
         Write-HudLog "Update-Deck error: $_ (linea $($_.InvocationInfo.ScriptLineNumber))"

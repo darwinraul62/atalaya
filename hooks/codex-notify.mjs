@@ -18,6 +18,11 @@
  * es "agent-turn-complete"; cualquier evento que contenga "approval" se trata
  * como "necesita tu atención". Codex no emite evento de inicio de turno, así
  * que la tarjeta de Codex refleja fin de turno y aprobaciones pendientes.
+ *
+ * De paso guarda los límites de uso de la cuenta (ventanas de 5 h / semanal)
+ * que Codex anota en su bitácora de sesión (rollout). Se leen AQUÍ, en el
+ * entorno donde corre Codex, porque desde Windows no se ve el ~/.codex de
+ * cada distro de WSL.
  */
 
 import fs from "node:fs";
@@ -25,6 +30,7 @@ import path from "node:path";
 import os from "node:os";
 import crypto from "node:crypto";
 import { spawn } from "node:child_process";
+import { readCodexLatest, writeLimit } from "./lib/limits.mjs";
 
 const dirFlag = process.argv.find((a) => a.startsWith("--dir="));
 const chainFlag = process.argv.find((a) => a.startsWith("--chain="));
@@ -119,5 +125,10 @@ try {
   main();
 } catch {
   /* nunca fallar */
+}
+try {
+  writeLimit(atalayaDir(), readCodexLatest(), process.platform === "win32" ? "windows" : "wsl");
+} catch {
+  /* nunca fallar: los límites son un extra */
 }
 process.exit(0);

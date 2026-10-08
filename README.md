@@ -325,6 +325,54 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   `Shift`, `Win` · teclas: `A`-`Z`, `0`-`9`, `F1`-`F24`, `Left/Right/Up/Down`,
   `Space`, `Tab` · `"none"` desactiva ese atajo.
 
+## Límites de uso de Claude Code y Codex
+
+Con suscripción (Claude Pro/Max, ChatGPT Plus/Pro) cada agente tiene una
+**ventana de 5 horas** y otra **semanal**. Atalaya muestra cuánto llevas de
+cada una y cuándo se reinicia, y avisa con una notificación al cruzar el 80 %
+y el 95 % (una sola vez por ventana; configurable).
+
+| Dónde | Qué se ve |
+|---|---|
+| Barra acoplada | `Claude 42%·18%` `Codex 9%` junto a los contadores (en vertical, `Cl` sobre el valor más alto). |
+| Píldora | Solo al pasar el primer umbral (`pill.limits`: `threshold`, `always` u `off`). |
+| Deck | Una fila por agente con barra, porcentaje y cuenta atrás (`↻ 2 h 10`). |
+| Panel | Una tarjeta por agente con cada ventana, plan y antigüedad del dato. |
+
+El nivel va con glifo además del color: **▲** pasado el aviso, **⛔** pasado el
+umbral urgente. Un medidor atenuado tiene un dato de más de 30 minutos; una
+ventana cuya hora de reinicio ya pasó se muestra como *reiniciada* hasta que el
+agente vuelva a informar.
+
+**Tarjeta de límites:** con el ratón encima de un medidor de la barra acoplada
+o de la píldora se abre una tarjeta como la del panel (barras, cuenta atrás y
+hora exacta del reinicio, plan y antigüedad del dato); se cierra al apartar el
+ratón. Un **clic** la deja fija hasta otro clic o su ✕, y *Abrir panel* lleva
+al detalle completo.
+
+**De dónde salen los datos** (sin contraseñas ni servicios externos):
+
+- **Claude Code** solo entrega sus límites al programa de la *statusline* (la
+  línea de estado al pie de la terminal); los hooks no los reciben. Por eso la
+  integración ocupa ese hueco de `~/.claude/settings.json`:
+  - si no tenías statusline, pone la de Atalaya: `modelo · carpeta · 5h 42% ↻2h10 · sem 18%`;
+  - si ya tenías una, la **encadena** (`claude-statusline.mjs --tee | la tuya`):
+    tu statusline sigue viéndose igual y al desinstalar se restaura tal cual;
+  - si no quieres que la toque: Ajustes → *Límites de uso* → desmarcar la
+    statusline (o `"limits": { "statusline": false }` en `config.json`).
+
+  Limitaciones de Claude Code: solo hay dato con suscripción (con clave de API
+  no existen estas ventanas), solo desde la terminal y solo mientras haya una
+  sesión abierta.
+- **Codex** anota los límites en su bitácora de sesión
+  (`$CODEX_HOME/sessions/**/rollout-*.jsonl`, por defecto `~/.codex`). El
+  notificador de Atalaya los recoge al terminar cada turno (también en WSL) y
+  el hub vigila además la carpeta de Windows, así que sirve para la terminal,
+  la extensión de VS Code y la app.
+
+Ninguno de los dos formatos es un contrato público: si cambian, el medidor se
+oculta en vez de fallar.
+
 ## Saltar a una sesión
 
 Cuando envías un prompt, el hub captura la ventana que está en primer plano
@@ -617,7 +665,8 @@ etiqueta informativa heredada (opcional).
   `labels.json` con las etiquetas por clone, `windows.json` con la ventana y
   escritorio de cada sesión, `config.json` con los hotkeys y las preferencias
   — secciones `hotkeys`, `pill`, `bar`, `privacy`, `deck`, `pomodoro`,
-  `integration`, `update` —,
+  `integration`, `update`, `limits` —, `limits/` con la última muestra de
+  límites de cada agente y los avisos ya dados,
   `desknames.json` con los últimos nombres de escritorio que has usado (los
   que se ofrecen al renombrar), `update.json`
   con el resultado de la última consulta de versión, `hub.log`,

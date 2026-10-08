@@ -42,6 +42,8 @@ try {
         "Atalaya/scripts/toast.ps1",
         "Atalaya/hooks/claude-hook.mjs",
         "Atalaya/hooks/codex-notify.mjs",
+        "Atalaya/hooks/claude-statusline.mjs",
+        "Atalaya/hooks/lib/limits.mjs",
         "Atalaya/hooks/integrate.mjs",
         "Atalaya/hooks/install-wsl.sh",
         "Atalaya/assets/atalaya.ico",
