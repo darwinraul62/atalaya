@@ -79,7 +79,11 @@ la tarea de la sesión ni reasocian su ventana. Un subagente cuyo fin no se
 registró caduca a las 6 h.
 
 Las sesiones sin actividad por más de 12 h dejan de mostrarse; las fichas se
-purgan del disco a las 72 h.
+purgan del disco a las 72 h. Tampoco se muestran las que no tienen actividad
+desde el último arranque de Windows: si el equipo se apagó con una sesión
+esperándole, el agente no llegó a avisar de su cierre y su alerta se quedaría
+encendida al volver. Si se reanuda (`--resume`), reaparece con su primer
+evento.
 
 ## Uso diario
 

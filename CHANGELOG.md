@@ -4,6 +4,15 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 [Keep a Changelog](https://keepachangelog.com/es/1.1.0/) y el versionado es
 [SemVer](https://semver.org/lang/es/).
 
+## [Sin publicar]
+
+### Corregido
+- **Alertas fantasma tras reiniciar el equipo.** Si Windows se apagaba con una
+  sesión esperándole, el agente nunca avisaba de su cierre y, al volver, su
+  escritorio seguía marcado como pendiente sin nada abierto. Ahora el hub
+  ignora las sesiones sin actividad desde el último arranque; si se reanuda
+  una, reaparece con su primer evento.
+
 ## [0.20.0] - 2026-10-07
 
 Los escritorios también se pueden manejar desde la barra de tareas o desde

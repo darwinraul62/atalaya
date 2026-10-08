@@ -99,6 +99,15 @@ function verifiedHudPid() {
 
 const STALE_HOURS = 12; // sesiones sin actividad más antiguas no se muestran
 const PURGE_HOURS = 72; // fichas más antiguas se borran del disco
+// Arranque de Windows. Ninguna sesión sobrevive a un reinicio (ni las de WSL,
+// cuya VM muere con el equipo), pero si se apagó sin que el agente emitiera
+// SessionEnd su ficha se queda con el último estado — p. ej. needs_you — y
+// encendería la campana al volver. Una ficha sin actividad desde antes del
+// arranque es por fuerza de una sesión muerta. Si se reanuda (--resume), el
+// primer evento nuevo la actualiza y vuelve a mostrarse.
+const BOOT_AT = Date.now() - os.uptime() * 1000;
+const BOOT_SLACK_MS = 60e3; // margen por la resolución de os.uptime()
+const beforeBoot = (s) => Date.parse(s.updatedAt || 0) < BOOT_AT - BOOT_SLACK_MS;
 
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
@@ -566,6 +575,7 @@ function loadSessions() {
       if (s.status === "closed") continue;
       const age = now - Date.parse(s.updatedAt || 0);
       if (isNaN(age) || age > STALE_HOURS * 3600e3) continue;
+      if (beforeBoot(s)) continue;
       const ws = matchWorkspace(workspaces, s.cwd);
       s.workspace = ws ? ws.name : null;
       s.desktop = ws ? ws.desktop || null : null;
