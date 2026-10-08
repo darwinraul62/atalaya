@@ -115,8 +115,9 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
     uso, cada una con su atajo escrito al lado:
     - arriba lo diario: **ir a la sesión que te necesita** (en gris si nadie
       espera), **abrir el panel** y **recentrar la píldora**;
-    - los interruptores rápidos: **Modo reunión** y **Barra acoplada**
-      (qué muestra, dónde van los escritorios, borde y monitor);
+    - los interruptores rápidos: **Modo reunión**, **Barra acoplada**
+      (qué muestra, dónde van los escritorios, borde y monitor) y **Límites
+      de uso** (encenderlos, qué agentes, barra y modo de la píldora);
     - en submenús lo ocasional: **Mostrar** (píldora, compacta, ocultar 15
       min, escritorios en la barra de tareas, deck, máximo foco),
       **Escritorio** (renombrar, mover, anclar) y **Utilidades** (pomodoro,
@@ -183,11 +184,13 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   - **Música** (`bar.music`): ⏮ ▶/⏸ ⏭ para el reproductor que Windows tenga
     activo (Spotify, YouTube en el navegador…) y el título de lo que suena,
     con ancho fijo para que los botones no se muevan al cambiar de canción.
-- **Modo reunión** (`Ctrl+Alt+M`, el ojo 👁 de la barra acoplada o la
-  bandeja): para compartir pantalla. Oculta los nombres de los escritorios
-  (píldora, barra, barra de tareas y deck; quedan los números), el pomodoro y
-  el título de la canción. El pomodoro sigue contando, sin sonido ni avisos
-  hasta salir del modo. Se recuerda entre reinicios.
+- **Modo reunión** (`Ctrl+Alt+M`, el ojo 👁 de la barra acoplada, el del
+  panel o la bandeja): para compartir pantalla. Oculta los nombres de los
+  escritorios (píldora, barra, barra de tareas, deck, panel y notificaciones;
+  quedan los números), el pomodoro, el título de la canción y los medidores de
+  límites de uso (con sus notificaciones). Panel y HUD van sincronizados: se
+  activa desde cualquiera y lo reflejan todos. El pomodoro sigue contando, sin sonido ni avisos hasta salir
+  del modo. Se recuerda entre reinicios.
   - En monitores con otra escala (p. ej. 175 %) la barra se ve algo borrosa:
     Windows la estira porque el HUD trabaja con una sola escala.
 - **HUD (píldora)**: un **botón por escritorio** con número y nombre — un
@@ -309,7 +312,7 @@ cualquier terminal, sin el `.cmd` ni la ruta.)
   | `Ctrl+Alt+H` | Recentrar la píldora (si quedó fuera de vista o tras un cambio de monitor/resolución: va a su esquina fija, o abajo al centro) |
   | `Ctrl+Alt+O` | Ocultar/mostrar la píldora (Atalaya sigue en la bandeja) |
   | `Ctrl+Alt+K` | Píldora compacta (solo contadores) / tamaño normal |
-  | `Ctrl+Alt+M` | Modo reunión: ocultar/mostrar nombres, pomodoro y título de la canción |
+  | `Ctrl+Alt+M` | Modo reunión: ocultar/mostrar nombres, pomodoro, título de la canción y límites de uso |
   | — (`none`) | Crear escritorio nuevo e ir a él |
   | — (`none`) | Mostrar/ocultar el deck |
 
@@ -338,6 +341,11 @@ y el 95 % (una sola vez por ventana; configurable).
 | Píldora | Solo al pasar el primer umbral (`pill.limits`: `threshold`, `always` u `off`). |
 | Deck | Una fila por agente con barra, porcentaje y cuenta atrás (`↻ 2 h 10`). |
 | Panel | Una tarjeta por agente con cada ventana, plan y antigüedad del dato. |
+
+Qué se ve se elige en Ajustes → *Límites de uso* o en la bandeja → **Límites de
+uso**: encenderlos o apagarlos, cada agente por separado (`limits.agents.claude`
+/ `limits.agents.codex` en `false` lo quita de todas las vistas y calla sus
+avisos), la barra acoplada (`bar.limits`) y el modo de la píldora.
 
 El nivel va con glifo además del color: **▲** pasado el aviso, **⛔** pasado el
 umbral urgente. Un medidor atenuado tiene un dato de más de 30 minutos; una

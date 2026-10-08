@@ -219,6 +219,8 @@ $DockCountersCfg = $true # contadores en la barra acoplada (bar.counters)
 $DockAlignCfg = "start"  # escritorios al inicio, centro o final (bar.align)
 $DockLimitsCfg = $true   # medidores de limites de uso en la barra acoplada (bar.limits)
 $PillLimitsCfg = "threshold" # en la pildora: "threshold" (al pasar el umbral), "always", "off"
+$LimEnabledCfg = $true   # medidores encendidos (limits.enabled)
+$LimShowCfg = @{ claude = $true; codex = $true }  # por agente (limits.agents.<id>)
 $MeetingCfg = $false  # modo reunion: oculta nombres (privacy.meeting)
 try {
     $cfg = Get-Content (Join-Path $StateDir "config.json") -Raw -ErrorAction Stop | ConvertFrom-Json
@@ -245,6 +247,8 @@ try {
     if ($cfg.bar.align -in @("start", "center", "end")) { $DockAlignCfg = [string]$cfg.bar.align }
     if ($null -ne $cfg.bar.limits) { $DockLimitsCfg = [bool]$cfg.bar.limits }
     if ($cfg.pill.limits -in @("threshold", "always", "off")) { $PillLimitsCfg = [string]$cfg.pill.limits }
+    if ($cfg.limits.enabled -eq $false) { $LimEnabledCfg = $false }
+    foreach ($k in @($LimShowCfg.Keys)) { if ($cfg.limits.agents.$k -eq $false) { $LimShowCfg[$k] = $false } }
     if ($null -ne $cfg.privacy.meeting) { $MeetingCfg = [bool]$cfg.privacy.meeting }
 } catch { }
 
@@ -1654,10 +1658,10 @@ function Update-DockBar($s) {
         $eye.FontFamily = $IconFont; $eye.FontSize = 12; $eye.VerticalAlignment = "Center"; $eye.HorizontalAlignment = "Center"
         if ($script:Meeting) {
             $eye.Text = [string][char]0xED1A; $eye.Foreground = $ColAttn
-            $eyeTip = "Modo reunión ACTIVO: nombres de escritorio, pomodoro y título de la canción ocultos. Clic para mostrarlos ($($Hotkeys.meetingMode))"
+            $eyeTip = "Modo reunión ACTIVO: nombres de escritorio, pomodoro, título de la canción y límites de uso ocultos. Clic para mostrarlos ($($Hotkeys.meetingMode))"
         } else {
             $eye.Text = [string][char]0xE890; $eye.Foreground = $ColInk3
-            $eyeTip = "Modo reunión: oculta nombres de escritorio, pomodoro y título de la canción para compartir pantalla ($($Hotkeys.meetingMode))"
+            $eyeTip = "Modo reunión: oculta nombres de escritorio, pomodoro, título de la canción y límites de uso para compartir pantalla ($($Hotkeys.meetingMode))"
         }
         $b = New-DockButton $eye $BgRow $(if ($script:Meeting) { $ColAttn } else { $BgRow }) $eyeTip "meeting"
         $b.Padding = if ($vertical) { "0,3" } else { "6,3" }
@@ -1814,6 +1818,57 @@ function Set-DockContent([string]$key, [bool]$v) {
     foreach ($b in $script:DockBars) { $b.Key = "" }
     Update-DockBar $script:LastSummary
     Update-DockExtras
+}
+# ---- Menu "Limites de uso" de la bandeja ----------------------------------------
+# Encendido general, que agentes se ven (el hub filtra: afecta a pildora, barra,
+# deck, panel y avisos), barra acoplada y modo de la pildora.
+$script:LimEnabled = $LimEnabledCfg
+$script:LimShow = $LimShowCfg
+$script:PillLimitsCfg = $PillLimitsCfg
+function Add-LimitsItem($items, [string]$text, [string]$tag, [bool]$on, [bool]$enabled = $true) {
+    $it = New-Object System.Windows.Forms.ToolStripMenuItem
+    $it.Text = $text; $it.Tag = $tag; $it.Checked = $on; $it.Enabled = $enabled
+    $it.Add_Click({ param($sender, $e) On-LimitsToggle $sender $e })
+    [void]$items.Add($it)
+}
+function Update-LimitsMenu {
+    if (-not $script:TrayLimits) { return }
+    $items = $script:TrayLimits.DropDownItems
+    $items.Clear()
+    $on = [bool]$script:LimEnabled
+    Add-LimitsItem $items "Mostrar los medidores" "enabled" $on
+    if ($script:Meeting) {
+        Add-LimitsItem $items "    (ocultos mientras dure el modo reunión)" "" $false $false
+    }
+    [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    Add-LimitsItem $items "Claude Code" "agent:claude" $script:LimShow["claude"] $on
+    Add-LimitsItem $items "Codex" "agent:codex" $script:LimShow["codex"] $on
+    [void]$items.Add((New-Object System.Windows.Forms.ToolStripSeparator))
+    Add-LimitsItem $items "En la barra acoplada" "dock" $script:DockShowLimits ($on -and [bool]$script:DockEdge)
+    foreach ($o in @(@("threshold", "En la píldora: solo al pasar el umbral"),
+                     @("always", "En la píldora: siempre"),
+                     @("off", "En la píldora: nunca"))) {
+        Add-LimitsItem $items $o[1] "pill:$($o[0])" ($script:PillLimitsCfg -eq $o[0]) $on
+    }
+}
+function On-LimitsToggle($sender, $e) {
+    $script:LimKeepOpen = $true
+    $tag = [string]$sender.Tag
+    if ($tag -eq "enabled") {
+        $script:LimEnabled = -not $script:LimEnabled
+        Invoke-HubPost "/api/config" ('{"limits":{"enabled":' + $(if ($script:LimEnabled) { "true" } else { "false" }) + '}}')
+    } elseif ($tag -like "agent:*") {
+        $agent = $tag.Substring(6)
+        $script:LimShow[$agent] = -not $script:LimShow[$agent]
+        Invoke-HubPost "/api/config" ('{"limits":{"agents":{"' + $agent + '":' + $(if ($script:LimShow[$agent]) { "true" } else { "false" }) + '}}}')
+    } elseif ($tag -eq "dock") {
+        Set-DockContent "limits" (-not $script:DockShowLimits)
+    } elseif ($tag -like "pill:*") {
+        $script:PillLimitsCfg = $tag.Substring(5)
+        Invoke-HubPost "/api/config" "{`"pill`":{`"limits`":`"$($script:PillLimitsCfg)`"}}"
+        Update-PillLimits $script:LastSummary
+    }
+    Update-LimitsMenu
 }
 function Set-DockAlign([string]$align) {
     if ($align -notin @("start", "center", "end")) { $align = "start" }
@@ -2050,6 +2105,13 @@ function Update-Hud {
     Update-DockBar $s
     Update-Deck $s
     Set-CornerPosition
+    # Modo reunion cambiado desde fuera (panel, ajustes): se adopta. Tras un
+    # cambio propio se espera un poco, que el POST al hub va en segundo plano
+    # y un resumen anterior lo desharia.
+    if ($null -ne $s.meeting -and [bool]$s.meeting -ne [bool]$script:Meeting -and
+        ((Get-Date) - $script:MeetingSetAt).TotalSeconds -gt 6) {
+        Set-MeetingMode ([bool]$s.meeting) -FromHub
+    }
 }
 
 # ---- Deck: mini-panel de escritorios sobre la pastilla -----------------------
@@ -2112,6 +2174,8 @@ function Format-Span([double]$ms) {
 
 function Get-LimitView($s) {
     $out = @()
+    # Modo reunion: el consumo tampoco se ensenia en pantalla compartida
+    if ($script:Meeting) { return $out }
     if (-not $s -or -not $s.limits -or -not $s.limits.enabled) { return $out }
     $warn = @($s.limits.warnAt)
     $lo = if ($warn.Count) { [double]$warn[0] } else { 80 }
@@ -2501,10 +2565,10 @@ function Complete-LimitCardPosition {
 function Update-PillLimits($s) {
     $views = @(Get-LimitView $s)
     $show = @()
-    if ($PillLimitsCfg -ne "off") {
+    if ($script:PillLimitsCfg -ne "off") {
         foreach ($v in $views) {
             if ($null -eq $v.Worst) { continue }
-            if ($PillLimitsCfg -eq "always" -and -not $script:PillCompact) { $show += $v }
+            if ($script:PillLimitsCfg -eq "always" -and -not $script:PillCompact) { $show += $v }
             elseif ($v.Level -in @("warn", "crit")) { $show += $v }
         }
     }
@@ -3676,13 +3740,18 @@ function Set-MusicEnabled([bool]$v) {
 
 # Modo reunion: un interruptor para compartir pantalla sin ensenar nombres de
 # escritorios (pildora, barra, barra de tareas, deck), el titulo de lo que
-# suena ni el pomodoro. El pomodoro sigue contando, pero sin sonido ni avisos
+# suena, el pomodoro ni los limites de uso. El pomodoro sigue contando, pero sin sonido ni avisos
 # hasta salir del modo; los controles de musica se quedan (son utiles y no
 # revelan nada sin el titulo).
-function Set-MeetingMode([bool]$v) {
+$script:MeetingSetAt = [DateTime]::MinValue
+function Set-MeetingMode([bool]$v, [switch]$FromHub) {
     $script:Meeting = $v
-    Write-HudLog "modo reunion: $(if ($v) { 'activado' } else { 'desactivado' })"
-    Invoke-HubPost "/api/config" ('{"privacy":{"meeting":' + $(if ($v) { "true" } else { "false" }) + '}}')
+    Write-HudLog "modo reunion: $(if ($v) { 'activado' } else { 'desactivado' })$(if ($FromHub) { ' (desde el panel)' })"
+    if (-not $FromHub) {
+        $script:MeetingSetAt = Get-Date
+        Invoke-HubPost "/api/config" ('{"privacy":{"meeting":' + $(if ($v) { "true" } else { "false" }) + '}}')
+    }
+    if ($v) { Close-LimitCard }
     foreach ($b in $script:DockBars) { $b.Key = "" }
     $script:TbKey = ""
     Update-Hud
@@ -4083,10 +4152,12 @@ function Update-TrayStatus($s) {
 # principal cuando quedo en una zona dificil de ver o fuera de los limites
 # (arrastre a otro monitor, cambio de resolucion, etc.). Con esquina fija va
 # a su esquina; con posicion libre, abajo al centro.
-function Move-PillHome {
+function Move-PillHome([switch]$KeepHidden) {
     # Si estaba oculta, "recentrar" tiene que devolverla a la vista: es el
-    # gesto de rescate y no debe fallar en silencio.
-    if ($script:PillHidden) { Show-Pill }
+    # gesto de rescate y no debe fallar en silencio. Salvo el recentrado
+    # automatico del arranque (-KeepHidden): ese solo corrige la posicion y
+    # respeta que el usuario la dejo oculta.
+    if ($script:PillHidden -and -not $KeepHidden) { Show-Pill }
     if ($PillCorner) {
         Set-CornerPosition
     } else {
@@ -4097,7 +4168,7 @@ function Move-PillHome {
         $window.Left = $a.Left + [Math]::Max(0, ($a.Width - $w) / 2)
         $window.Top  = $a.Bottom - $h - 7
     }
-    $window.Opacity = 1.0   # bien visible hasta el siguiente refresco
+    if (-not $script:PillHidden) { $window.Opacity = 1.0 }   # bien visible hasta el siguiente refresco
     Save-Position
     if ($deck.IsVisible) { Position-Deck }
 }
@@ -4228,6 +4299,18 @@ $script:TrayDock.DropDown.Add_Closing({
     $script:DockKeepOpen = $false
 })
 [void]$trayMenu.Items.Add($script:TrayDock)
+# Limites de uso: mismo patron (se rellena al abrirse y no se cierra al marcar)
+$script:TrayLimits = New-Object System.Windows.Forms.ToolStripMenuItem
+$script:TrayLimits.Text = "Límites de uso"
+[void]$script:TrayLimits.DropDownItems.Add("...")
+$script:TrayLimits.Add_DropDownOpening({ Update-LimitsMenu })
+$script:LimKeepOpen = $false
+$script:TrayLimits.DropDown.Add_Closing({
+    param($sender, $e)
+    if ($script:LimKeepOpen -and $e.CloseReason -eq [System.Windows.Forms.ToolStripDropDownCloseReason]::ItemClicked) { $e.Cancel = $true }
+    $script:LimKeepOpen = $false
+})
+[void]$trayMenu.Items.Add($script:TrayLimits)
 Add-TraySep
 
 $smShow = Add-TraySubmenu "Mostrar"
@@ -4422,8 +4505,8 @@ $window.Add_ContentRendered({
     # que ya no existe). Antes solo se validaba contra el rectangulo que
     # engloba todas las pantallas, que incluye esos huecos.
     if ($script:PillHwnd -and -not [AtalayaHotkey]::OnScreen($script:PillHwnd)) {
-        Write-HudLog "pildora fuera de pantalla al arrancar; recentrada"
-        Move-PillHome
+        Write-HudLog "pildora fuera de pantalla al arrancar; recentrada$(if ($script:PillHidden) { ' (sigue oculta)' })"
+        Move-PillHome -KeepHidden
     }
     $timer.Start()
     Pin-ToAllDesktops

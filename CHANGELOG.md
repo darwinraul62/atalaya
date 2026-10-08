@@ -6,6 +6,27 @@ Todos los cambios relevantes de Atalaya. El formato sigue
 
 ## [Sin publicar]
 
+## [0.21.1] - 2026-10-08
+
+### Añadido
+- **Límites de uso por agente:** mostrar u ocultar el medidor de Claude Code y
+  el de Codex por separado (Ajustes → *Límites de uso*, `limits.agents`). Un
+  agente oculto desaparece de todas las vistas y no avisa.
+- Submenú **Límites de uso** en la bandeja: encenderlos, qué agentes, barra
+  acoplada y modo de la píldora, sin pasar por Ajustes ni reiniciar el HUD.
+
+### Corregido
+- La píldora oculta volvía a aparecer al reiniciar el equipo si la posición
+  guardada caía fuera de las pantallas (otra disposición de monitores): el
+  recentrado automático del arranque la mostraba y guardaba «visible». Ahora
+  la recoloca sin mostrarla.
+- El modo reunión ahora oculta también los medidores de límites de uso
+  (píldora, barra, deck y tarjeta) y calla sus notificaciones mientras dura.
+- El modo reunión llega también al **panel** (escritorios solo con número,
+  sin lápiz de renombrar y sin medidores) y a las **notificaciones** de
+  sesiones (sin el nombre del escritorio). El panel tiene su propio ojo 👁 y
+  HUD y panel se sincronizan: se active donde se active, lo reflejan todos.
+
 ## [0.21.0] - 2026-10-08
 
 Atalaya muestra cuánto llevas gastado de los límites de uso de Claude Code y

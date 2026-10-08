@@ -69,6 +69,7 @@
   button.chip:hover { border-color: var(--ink-3); }
   button.chip:focus-visible, .card:focus-visible, button:focus-visible, input:focus-visible { outline: 2px solid var(--chrome); outline-offset: 2px; }
   button.chip[aria-pressed="true"] { border-color: currentColor; background: var(--panel-2); }
+  button.chip.icon#meetingToggle[aria-pressed="true"] { color: var(--attn); background: var(--attn-bg); }
   .chip .n { font-family: var(--mono); font-variant-numeric: tabular-nums; }
   .chip.attn { color: var(--attn); } .chip.work { color: var(--work); }
   .chip.ready { color: var(--ready); } .chip.idle { color: var(--idle); }
@@ -239,6 +240,7 @@
         title="Alternar cuadrícula / una sola fila">⊞</button>
       <button class="chip icon" id="notesToggle" aria-pressed="true"
         title="Mostrar u ocultar las notas manuales">🗒</button>
+      <button class="chip icon" id="meetingToggle" aria-pressed="false">👁</button>
       <button class="chip icon" id="settingsBtn" title="Ajustes (hotkeys, píldora y vistas)">⚙</button>
     </div>
   </div>
@@ -350,7 +352,7 @@
       <label><input type="checkbox" id="setDockMusic"> Controles de música en la barra acoplada (anterior, reproducir/pausa, siguiente)</label>
       <label><input type="checkbox" id="setDockMusicTitle"> … con el título de lo que suena</label>
       <label><input type="checkbox" id="setDockCounters"> Contadores de sesiones en la barra acoplada</label>
-      <label><input type="checkbox" id="setMeeting"> Modo reunión: ocultar nombres de escritorios, el pomodoro y el título de la canción (para compartir pantalla; también con 👁 en la barra)</label>
+      <label><input type="checkbox" id="setMeeting"> Modo reunión: ocultar nombres de escritorios, el pomodoro, el título de la canción y los límites de uso (para compartir pantalla; también con 👁 en la barra)</label>
     </div>
     <div class="set-grid">
       <label>Pomodoro: minutos de foco <input id="setPomoWork" type="number" min="5" max="120" step="5" placeholder="25"></label>
@@ -362,6 +364,8 @@
     <div class="set-checks">
       <label><input type="checkbox" id="setLimEnabled"> Mostrar los medidores de límites (ventana de 5 h y semanal de la suscripción)</label>
       <label><input type="checkbox" id="setLimStatusline"> Claude Code: usar la statusline para leerlos (si ya tenías una, Atalaya la encadena sin cambiar lo que ves; desmarcado = sin medidor de Claude)</label>
+      <label><input type="checkbox" id="setLimClaude"> Medidor de Claude Code</label>
+      <label><input type="checkbox" id="setLimCodex"> Medidor de Codex</label>
       <label><input type="checkbox" id="setDockLimits"> Medidores en la barra acoplada</label>
     </div>
     <div class="set-grid">
@@ -629,7 +633,8 @@ function groupSessions() {
     if (!groups.has(key)) {
       groups.set(key, {
         num,
-        name: num !== null ? name || "Escritorio " + (num + 1) : null,
+        // Modo reunión: solo el número, como en la píldora y la barra
+        name: num !== null ? (!state.meeting && name) || "Escritorio " + (num + 1) : null,
         items: [],
         windows: [],
       });
@@ -718,7 +723,8 @@ function render() {
         });
         input.addEventListener("blur", () => { if (!done) { done = true; render(); } });
       });
-      h.append(rename);
+      // En modo reunión el lápiz se retira: editar enseñaría el nombre real
+      if (!state.meeting) h.append(rename);
       // Reordenar: mueve el escritorio REAL de sitio (Win+Tab y los atajos de
       // Windows pasan a verlo en su nueva posición, con sus ventanas).
       const total = allDesktops.length;
@@ -871,6 +877,21 @@ function setViewAll(v) {
 }
 
 notesToggle.addEventListener("click", () => setShowNotes(!showNotes));
+
+// Modo reunión: el mismo interruptor que el ojo de la barra y Ctrl+Alt+M. Se
+// guarda en el hub y el HUD lo adopta en su siguiente consulta.
+const meetingToggle = document.getElementById("meetingToggle");
+function renderMeeting() {
+  const on = !!(state && state.meeting);
+  meetingToggle.setAttribute("aria-pressed", String(on));
+  meetingToggle.textContent = on ? "👁 reunión" : "👁";
+  meetingToggle.title = on
+    ? "Modo reunión ACTIVO: nombres de escritorio y límites de uso ocultos (aquí y en la píldora y la barra). Clic para mostrarlos"
+    : "Modo reunión: ocultar nombres de escritorio, pomodoro, título de la canción y límites de uso para compartir pantalla";
+}
+meetingToggle.addEventListener("click", async () => {
+  await postJson("/api/config", { privacy: { meeting: !(state && state.meeting) } });
+});
 layoutToggle.addEventListener("click", () => setLayoutRow(!layoutRow));
 viewToggle.addEventListener("click", () => setViewAll(!viewAll));
 document.getElementById("chkNotas").addEventListener("change", (e) => setShowNotes(e.target.checked));
@@ -943,6 +964,8 @@ settingsBtn.addEventListener("click", async () => {
     const lim = cfg.limits || {};
     document.getElementById("setLimEnabled").checked = lim.enabled !== false;
     document.getElementById("setLimStatusline").checked = lim.statusline !== false;
+    document.getElementById("setLimClaude").checked = !(lim.agents && lim.agents.claude === false);
+    document.getElementById("setLimCodex").checked = !(lim.agents && lim.agents.codex === false);
     document.getElementById("setDockLimits").checked = !(cfg.bar && cfg.bar.limits === false);
     document.getElementById("setPillLimits").value = (cfg.pill && cfg.pill.limits) || "threshold";
     const warn = Array.isArray(lim.warnAt) && lim.warnAt.length ? lim.warnAt : [80, 95];
@@ -1013,6 +1036,10 @@ document.getElementById("setSave").addEventListener("click", async () => {
   const limits = {
     enabled: document.getElementById("setLimEnabled").checked,
     statusline: document.getElementById("setLimStatusline").checked,
+    agents: {
+      claude: document.getElementById("setLimClaude").checked,
+      codex: document.getElementById("setLimCodex").checked,
+    },
     warnAt: [
       Number(document.getElementById("setLimWarn1").value) || 80,
       Number(document.getElementById("setLimWarn2").value) || 95,
@@ -1103,7 +1130,8 @@ function fmtSpan(ms) {
 function renderLimits() {
   const lim = state && state.limits;
   limitsEl.replaceChildren();
-  if (!lim || !lim.enabled) return;
+  // Modo reunión: el consumo no se enseña en pantalla compartida
+  if (!lim || !lim.enabled || state.meeting) return;
   const now = Date.now();
   const top = lim.warnAt[lim.warnAt.length - 1];
   for (const a of lim.agents) {
@@ -1179,6 +1207,7 @@ function connect() {
         return;
       }
       renderUpdate(state.update);
+      renderMeeting();
       render();
       renderLimits();
     } catch { /* frame corrupto */ }

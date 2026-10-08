@@ -840,6 +840,8 @@ function buildPayload() {
     hubVersion: VERSION,
     update: updateInfo,
     limits: buildLimits(),
+    // Modo reunión: el panel y el HUD lo leen de aquí para ir sincronizados
+    meeting: meetingMode(),
   };
 }
 
@@ -863,6 +865,7 @@ function buildSummary(payload) {
       ? { available: true, behind: updateInfo.behind, tag: updateInfo.tag }
       : null,
     limits: payload.limits,
+    meeting: payload.meeting,
   };
 }
 
@@ -971,7 +974,10 @@ function checkTransitions(payload) {
     if (s.status !== "needs_you" && s.status !== "ready") continue;
     if (now - (lastToast.get(s.sessionId) || 0) < 15e3) continue;
     lastToast.set(s.sessionId, now);
-    const where = s.desktopName ? ` — ${s.desktopName}` : s.desktop ? ` — ${s.desktop}` : "";
+    // En modo reunión el aviso no lleva el nombre del escritorio: el número sí
+    const deskNum = s.desktopNum !== null && s.desktopNum !== undefined ? s.desktopNum : null;
+    const where = meetingMode() ? (deskNum !== null ? ` — Escritorio ${deskNum + 1}` : "")
+      : s.desktopName ? ` — ${s.desktopName}` : s.desktop ? ` — ${s.desktop}` : "";
     const who = s.label || s.project;
     if (s.status === "needs_you") {
       showToast(`Te necesita: ${who}${where}`, s.message || s.task || "Sesión esperando tu respuesta");
@@ -997,12 +1003,22 @@ const LIMIT_AGENTS = [
 const LIMIT_ALERTS_FILE = path.join(LIMITS_DIR, "alerts.json");
 const LIMIT_STALE_MS = 30 * 60e3; // más viejo que esto: se muestra atenuado
 
+// Modo reunión (privacy.meeting): pantalla compartida, sin nombres de
+// escritorio ni consumo a la vista.
+function meetingMode() {
+  return !!(readConfig().privacy || {}).meeting;
+}
+
 function limitsConfig() {
   const cfg = readConfig().limits || {};
   let warnAt = Array.isArray(cfg.warnAt) ? cfg.warnAt.map(Number) : [80, 95];
   warnAt = warnAt.filter((n) => Number.isFinite(n) && n > 0 && n <= 100).sort((a, b) => a - b);
   if (!warnAt.length) warnAt = [80, 95];
-  return { enabled: cfg.enabled !== false, warnAt };
+  // Medidores por agente (limits.agents.<id> = false lo oculta en todas las
+  // vistas y calla sus avisos); por defecto se ven todos.
+  const show = {};
+  for (const [agent] of LIMIT_AGENTS) show[agent] = !(cfg.agents && cfg.agents[agent] === false);
+  return { enabled: cfg.enabled !== false, warnAt, show };
 }
 
 function limitLevel(pct, warnAt) {
@@ -1012,11 +1028,12 @@ function limitLevel(pct, warnAt) {
 }
 
 function buildLimits() {
-  const { enabled, warnAt } = limitsConfig();
-  if (!enabled) return { enabled: false, warnAt, agents: [] };
+  const { enabled, warnAt, show } = limitsConfig();
+  if (!enabled) return { enabled: false, warnAt, show, agents: [] };
   const now = Date.now();
   const agents = [];
   for (const [agent, name] of LIMIT_AGENTS) {
+    if (!show[agent]) continue;
     const s = readLimit(STATE_DIR, agent);
     if (!s) continue;
     const windows = s.windows.map((w) => {
@@ -1046,7 +1063,7 @@ function buildLimits() {
       worst: worst ? { id: worst.id, label: worst.label, usedPct: worst.usedPct, level: worst.level } : null,
     });
   }
-  return { enabled: true, warnAt, agents };
+  return { enabled: true, warnAt, show, agents };
 }
 
 let limitAlerts = {};
@@ -1069,6 +1086,10 @@ function fmtReset(ms) {
 // al reiniciar el hub, y se podan las de ventanas ya vencidas.
 function checkLimitAlerts(limits) {
   if (!limits.enabled) return;
+  // Modo reunión: la pantalla está compartida y el consumo no se enseña. El
+  // umbral se marca igual, para no soltar los avisos atrasados al salir.
+  const meeting = meetingMode();
+  const toast = (title, msg) => { if (!meeting) showToast(title, msg); };
   const now = Date.now();
   let dirty = false;
   for (const a of limits.agents) {
@@ -1079,7 +1100,7 @@ function checkLimitAlerts(limits) {
         if (limitAlerts[`${base}:full`] && !limitAlerts[`${base}:reset`]) {
           limitAlerts[`${base}:reset`] = now;
           dirty = true;
-          showToast(`${a.name}: límite ${w.label} reiniciado`, "Ya puede volver a usarlo.");
+          toast(`${a.name}: límite ${w.label} reiniciado`, "Ya puede volver a usarlo.");
         }
         continue;
       }
@@ -1092,7 +1113,7 @@ function checkLimitAlerts(limits) {
       // Se marca también todo umbral inferior: no avisar del 80 después del 95
       for (const t of limits.warnAt) if (t <= crossed) limitAlerts[`${base}:${t}`] = now;
       dirty = true;
-      showToast(
+      toast(
         `${a.name}: ${w.usedPct}% del límite ${w.label}`,
         w.resetsAt ? `Se reinicia ${fmtReset(w.resetsAt)}.` : "Vaya con cuidado con el uso.",
       );
@@ -1499,6 +1520,12 @@ const server = http.createServer(async (req, res) => {
     if (body.limits && typeof body.limits === "object") {
       cfg.limits = { ...cfg.limits };
       if (body.limits.enabled !== undefined) cfg.limits.enabled = !!body.limits.enabled;
+      if (body.limits.agents && typeof body.limits.agents === "object") {
+        cfg.limits.agents = { ...cfg.limits.agents };
+        for (const [agent] of LIMIT_AGENTS) {
+          if (body.limits.agents[agent] !== undefined) cfg.limits.agents[agent] = !!body.limits.agents[agent];
+        }
+      }
       if (body.limits.statusline !== undefined) {
         const v = !!body.limits.statusline;
         reintegrate = v !== (cfg.limits.statusline !== false);
